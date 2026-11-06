@@ -1,0 +1,43 @@
+namespace MediaServer.Api.Hls;
+
+public sealed class HlsOptions
+{
+    public string FfmpegPath { get; init; } = "ffmpeg";
+    public string TempDir { get; init; } = Path.Combine(Path.GetTempPath(), "mediaserver-hls");
+    /// <summary>Concurrent transcodes. Starting one more evicts the least recently used.</summary>
+    public int MaxSessions { get; init; } = 2;
+    /// <summary>A session nobody has touched for this long is killed.</summary>
+    public int IdleSeconds { get; init; } = 120;
+    public int StartTimeoutSeconds { get; init; } = 30;
+    public int SegmentSeconds { get; init; } = 6;
+    /// <summary>"libx264" (CPU) or "nvenc" (NVIDIA GPU).</summary>
+    public string Encoder { get; init; } = "libx264";
+    public int MaxHeight { get; init; } = 1080;
+    /// <summary>When false, anything that would need the video re-encoded is refused (direct play and direct stream still work).</summary>
+    public bool AllowTranscoding { get; init; } = true;
+    public int ReapIntervalSeconds { get; init; } = 10;
+    /// <summary>How long a segment request waits for the encoder before giving up (a seek may first have to restart ffmpeg).</summary>
+    public int SegmentWaitSeconds { get; init; } = 45;
+    /// <summary>Live channels use shorter segments so a channel change starts in a few seconds.</summary>
+    public int LiveSegmentSeconds { get; init; } = 2;
+
+    public static HlsOptions From(IConfiguration c)
+    {
+        var d = new HlsOptions();
+        return new HlsOptions
+        {
+            FfmpegPath = c["Tools:FfmpegPath"] ?? d.FfmpegPath,
+            TempDir = Path.GetFullPath(c["Hls:TempDir"] ?? d.TempDir),
+            MaxSessions = Math.Max(1, c.GetValue("Hls:MaxSessions", d.MaxSessions)),
+            IdleSeconds = Math.Max(1, c.GetValue("Hls:IdleSeconds", d.IdleSeconds)),
+            StartTimeoutSeconds = Math.Max(1, c.GetValue("Hls:StartTimeoutSeconds", d.StartTimeoutSeconds)),
+            SegmentSeconds = Math.Clamp(c.GetValue("Hls:SegmentSeconds", d.SegmentSeconds), 2, 20),
+            Encoder = (c["Hls:Encoder"] ?? d.Encoder).ToLowerInvariant() is "nvenc" ? "nvenc" : "libx264",
+            AllowTranscoding = c.GetValue("Hls:AllowTranscoding", d.AllowTranscoding),
+            MaxHeight = Math.Max(240, c.GetValue("Hls:MaxHeight", d.MaxHeight)),
+            ReapIntervalSeconds = Math.Max(1, c.GetValue("Hls:ReapIntervalSeconds", d.ReapIntervalSeconds)),
+            SegmentWaitSeconds = Math.Clamp(c.GetValue("Hls:SegmentWaitSeconds", d.SegmentWaitSeconds), 1, 300),
+            LiveSegmentSeconds = Math.Clamp(c.GetValue("Hls:LiveSegmentSeconds", d.LiveSegmentSeconds), 1, 10),
+        };
+    }
+}

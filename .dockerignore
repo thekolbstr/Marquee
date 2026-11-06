@@ -1,0 +1,11 @@
+**/bin/
+**/obj/
+.git/
+.github/
+tests/
+data/
+*.db
+*.db-shm
+*.db-wal
+.vs/
+.idea/
