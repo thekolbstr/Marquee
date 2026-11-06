@@ -11,6 +11,9 @@ using MediaServer.Api.Probing;
 
 namespace MediaServer.Api.Hls;
 
+public sealed record HlsSessionInfo(string Mode, string Reason, string Encoder, string Audio, string Container, bool Vod, bool Live, bool Running,
+    int SegmentsReady, int SegmentsTotal, int Relaunches, int AgeSeconds, int? MaxWidth, int? VideoKbps, bool BurnedInSubtitles);
+
 public sealed class HlsStartException(string message) : Exception(message);
 
 /// <summary>One ffmpeg process. A session has at most one at a time; a far seek replaces it.</summary>
@@ -305,6 +308,19 @@ public sealed partial class HlsSessionManager : IDisposable
 
     public static bool IsValidSessionId(string id) => IdRx().IsMatch(id);
     public static bool IsValidFileName(string name) => FileRx().IsMatch(name);
+
+    /// <summary>"nvenc" or "libx264": what the server would use for a transcode right now.</summary>
+    public string Encoder => Opts.Encoder;
+
+    /// <summary>A snapshot for the player's "stats for nerds": what this stream is doing on the server. Never includes paths or URLs.</summary>
+    public HlsSessionInfo? Info(string id)
+    {
+        if (Get(id) is not { } s) return null;
+        var produced = 0;
+        try { produced = Directory.Exists(s.Dir) ? Directory.EnumerateFiles(s.Dir, "seg*").Take(100_000).Count() : 0; } catch (IOException) { }
+        return new HlsSessionInfo(s.Mode, s.Reason, s.Plan.Video == VideoMode.Encode ? Opts.Encoder : "none (video copied)", s.Plan.Audio.ToString(), s.Plan.Segments == HlsSegments.Fmp4 ? "fMP4" : "MPEG-TS",
+            s.Vod, s.Live, s.IsRunning, produced, s.SegmentCount, s.Relaunches, (int)(DateTimeOffset.UtcNow - s.StartedAt).TotalSeconds, s.Plan.MaxWidth, s.Plan.VideoKbps, s.Plan.BurnSubtitle is not null);
+    }
 
     public HlsSession? Get(string id) => IsValidSessionId(id) && _sessions.TryGetValue(id, out var s) ? s : null;
 

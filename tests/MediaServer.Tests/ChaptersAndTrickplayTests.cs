@@ -33,7 +33,7 @@ public sealed class ChapterParsingTests
     {
         // "Opening Night..." does contain the word Opening, but a 15-minute chapter isn't a title sequence
         var longChapter = new Chapter(0, 900, title);
-        Assert.Empty(ChapterService.Build([longChapter]).Markers.Where(m => m.Kind == "intro"));
+        Assert.DoesNotContain(ChapterService.Build([longChapter]).Markers, m => m.Kind == "intro");
     }
 
     [Fact] public void AnIntroLongerThanTenMinutes_IsNotOffered() => Assert.Empty(ChapterService.Build([new Chapter(0, 700, "Intro")]).Markers);

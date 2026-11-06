@@ -158,6 +158,8 @@ public sealed class WebClientTests : IDisposable
     [InlineData("/settings.js", "javascript")]
     [InlineData("/auth.js", "javascript")]
     [InlineData("/extras.js", "javascript")]
+    [InlineData("/shared.js", "javascript")]
+    [InlineData("/player.js", "javascript")]
     [InlineData("/sw.js", "javascript")]
     [InlineData("/live.css", "css")]
     [InlineData("/style.css", "text/css")]

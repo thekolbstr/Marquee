@@ -2,6 +2,7 @@
 FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
 WORKDIR /src
 # Restore first so dependency layers cache independently of source changes.
+COPY Directory.Build.props ./
 COPY src/MediaServer.Api/MediaServer.Api.csproj src/MediaServer.Api/
 RUN dotnet restore src/MediaServer.Api/MediaServer.Api.csproj
 COPY src/ src/

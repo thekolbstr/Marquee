@@ -130,9 +130,11 @@ public static class AuthEndpoints
             ctx.Items[UserItem] is AuthUser user ? Results.Ok(new { revoked = auth.RevokeOthers(user.Id, ctx.Request.Cookies[AuthService.CookieName]) }) : Results.Unauthorized());
 
         // What the page needs to know about this server in one small call.
-        app.MapGet("/api/app", (AuthService auth, IConfiguration config) => Results.Ok(new
+        app.MapGet("/api/app", (AuthService auth, IConfiguration config, MediaServer.Api.Security.HttpsStatus https) => Results.Ok(new
         {
             serverName = auth.ServerName,
+            httpsPort = https.Enabled ? https.Port : (int?)null,
+            castBaseUrl = config["Cast:BaseUrl"] is { Length: > 0 } cb ? cb : null,
             allowTranscoding = MediaServer.Api.Hls.HlsOptions.From(config).AllowTranscoding,
             authEnabled = auth.Enabled,
         }));

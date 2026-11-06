@@ -37,6 +37,9 @@ public static class HlsEndpoints
         });
 
         // Keep-alive while a player is open (even if paused with a full buffer).
+        // Read-only facts about a running stream, for the player's stats panel. The session id is the capability, as for the playlist itself.
+        app.MapGet("/api/hls/{sessionId}/info", (string sessionId, HlsSessionManager hls) => hls.Info(sessionId) is { } i ? Results.Ok(i) : Results.NotFound());
+
         app.MapPost("/api/hls/{sessionId}/ping", (string sessionId, HlsSessionManager hls) =>
         {
             if (hls.Get(sessionId) is not { } s) return Results.NotFound();

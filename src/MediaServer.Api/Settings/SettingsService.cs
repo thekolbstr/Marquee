@@ -88,6 +88,7 @@ public sealed class SettingsService(Database db, DbSettingsProvider provider, IC
         new("Recordings:KeepDays", "livetv", "Delete recordings after", "0 keeps them until you delete them yourself.", SettingKind.Int, 0, 3650, Default: "0", Unit: "days"),
 
         // network & security
+        new("Cast:BaseUrl", "network", "Address for casting", "Optional. Cast devices (Chromecast) fetch the video themselves, so they need an address for this server that works from their side: plain http, not https. Leave empty to use the one you're browsing with.", SettingKind.Url, Placeholder: "http://192.0.2.10:8080"),
         new("Auth:SessionDays", "network", "“Keep me signed in” lasts", "How long a remembered sign-in stays valid. Applies to new sign-ins.", SettingKind.Int, 1, 365, Default: "30", Unit: "days"),
         new("Auth:IdleHours", "network", "Other sign-ins end after", "Sign-ins that weren't remembered end after this long without use.", SettingKind.Int, 1, 168, Default: "12", Unit: "hours"),
         new("Auth:TrustProxy", "network", "Behind a reverse proxy", "Turn on if this server sits behind Traefik, nginx or Caddy, so failed sign-ins are tracked per visitor instead of per proxy. Leave it off if visitors connect directly.", SettingKind.Bool, Default: "false"),

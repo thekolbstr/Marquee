@@ -15,9 +15,9 @@ function paintUserChip() {
   if (gear) gear.after(chip);
 }
 // What the server says about itself (name, whether transcoding is on). Filled in at start-up.
-const APP = { name: 'MediaServer', allowTranscoding: true };
+const APP = { name: 'MediaServer', allowTranscoding: true, httpsPort: null, castBaseUrl: null };
 async function refreshApp() {
-  try { const a = await (await fetch('/api/app')).json(); applyServerName(a.serverName); APP.allowTranscoding = a.allowTranscoding; } catch { /* keep what we had */ }
+  try { const a = await (await fetch('/api/app')).json(); applyServerName(a.serverName); APP.allowTranscoding = a.allowTranscoding; APP.httpsPort = a.httpsPort; APP.castBaseUrl = a.castBaseUrl; } catch { /* keep what we had */ }
 }
 function applyServerName(name) {
   APP.name = name || 'MediaServer';

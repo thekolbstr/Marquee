@@ -60,12 +60,35 @@ function icon(name) {
   return svg;
 }
 
-async function api(path, opts) {
-  const res = await fetch(path, opts);
+// Every call to the server goes through here: a time limit, one place that notices a signed-out session, and errors a person can read.
+async function api(path, { timeoutMs = 30000, ...opts } = {}) {
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), timeoutMs);
+  let res;
+  try { res = await fetch(path, { ...opts, signal: opts.signal || ctl.signal }); }
+  catch (e) { throw new Error(e.name === 'AbortError' ? 'The server took too long to answer.' : 'Can’t reach the server. Check your connection.'); }
+  finally { clearTimeout(timer); }
   if (res.status === 401 && !path.startsWith('/api/auth/')) { authLost(); throw new Error('Signed out'); }
-  if (!res.ok) throw new Error(res.status === 404 ? 'Not found' : `Server error (${res.status})`);
+  if (!res.ok) {
+    let message = '';
+    try { message = (await res.json()).error || ''; } catch { /* the body wasn't JSON */ }
+    throw new Error(message || ({ 403: 'You don’t have permission to do that.', 404: 'Not found', 429: 'Too many requests. Try again in a moment.' }[res.status] || `Server error (${res.status})`));
+  }
   return res.status === 204 ? null : res.json();
 }
+
+// Anything unexpected that escapes the page's own handling is reported once to the server log (a handful per page load), so a bug in the page
+// never goes unnoticed.
+let reportedErrors = 0;
+function reportClientError(kind, detail) {
+  if (++reportedErrors > 5) return;
+  try {
+    fetch('/api/client-events', { method: 'POST', headers: { 'content-type': 'application/json' }, keepalive: true,
+      body: JSON.stringify({ kind, detail: String(detail || '').slice(0, 300), mode: null, mediaId: null, mediaError: null, nativeHls: false, mse: !!window.MediaSource }) }).catch(() => {});
+  } catch { /* reporting must never throw */ }
+}
+window.addEventListener('error', (e) => reportClientError('js-error', `${e.message} @ ${String(e.filename || '').split('/').pop()}:${e.lineno}`));
+window.addEventListener('unhandledrejection', (e) => reportClientError('js-rejection', (e.reason && e.reason.message) || e.reason));
 
 function toast(msg, bad) {
   if (AUTH.locked) return;
@@ -74,13 +97,8 @@ function toast(msg, bad) {
   setTimeout(() => t.remove(), 4500);
 }
 
-const fmtRuntime = (s) => {
-  if (!s) return '';
-  const m = Math.round(s / 60);
-  if (m < 1) return '<1m';
-  return m >= 60 ? `${Math.floor(m / 60)}h ${m % 60}m` : `${m}m`;
-};
-const fmtLeft = (pos, dur) => (dur && dur > pos ? `${fmtRuntime(dur - pos)} left` : '');
+const fmtRuntime = formatRuntime;
+const fmtLeft = (pos, dur) => (dur && dur > pos ? formatLeft(dur - pos) : '');
 const resLabel = (w, hgt) => (!w ? null : w >= 3500 || hgt >= 2000 ? '4K' : w >= 1800 || hgt >= 1000 ? '1080p' : w >= 1200 || hgt >= 700 ? '720p' : 'SD');
 const codecLabel = (c) => ({ hevc: 'HEVC', h264: 'H.264', vp9: 'VP9', av1: 'AV1', vc1: 'VC-1', mpeg4: 'MPEG-4' }[c] || (c ? c.toUpperCase() : null));
 
@@ -94,7 +112,7 @@ function runLeave() { const fns = leaveFns; leaveFns = []; for (const fn of fns.
 // ================================================================ artwork: image over a generated gradient
 function hashHue(s) { let n = 7; for (const ch of s) n = (n * 31 + ch.codePointAt(0)) % 360; return n; }
 
-function art(src, title, { progress, badge, overlay, portrait } = {}) {
+function art(src, title, { progress, badge, overlay, portrait, left, watched } = {}) {
   const hue = hashHue(title || '?');
   const el = h('div', { class: 'art' + (portrait ? ' portrait' : ''), style: `background:linear-gradient(135deg,hsl(${hue} 42% 30%),hsl(${(hue + 45) % 360} 48% 16%))` },
     h('span', { class: 'initial' }, (title || '?').trim().charAt(0).toUpperCase()));
@@ -106,12 +124,14 @@ function art(src, title, { progress, badge, overlay, portrait } = {}) {
   }
   if (badge) el.append(h('span', { class: 'badge' }, badge));
   if (overlay) el.append(h('span', { class: 'play-overlay' }, h('span', {}, icon('play'))));
+  if (watched) el.append(h('span', { class: 'seen', title: 'Watched', 'aria-label': 'Watched' }, icon('check')));
+  if (left) el.append(h('span', { class: 'leftlabel' }, left));            // "42m left" on anything you're partway through
   if (progress > 0) el.append(h('span', { class: 'progress' }, h('i', { style: `width:${Math.min(100, Math.round(progress * 100))}%` })));
   return el;
 }
 
-function tile({ href, title, hover, sub, img, progress, badge, portrait }) {
-  return h('a', { class: 'tile', href, title: hover || title }, art(img, title, { progress, badge, overlay: true, portrait }),
+function tile({ href, title, hover, sub, img, progress, badge, portrait, left, watched }) {
+  return h('a', { class: 'tile', href, title: hover || title }, art(img, title, { progress, badge, overlay: true, portrait, left, watched }),
     h('div', { class: 't' }, title), sub ? h('div', { class: 's' }, sub) : null);
 }
 
@@ -121,11 +141,13 @@ const itemSub = (i) => [i.year, i.type === 'series' ? `${i.episodeCount} episode
 // shows its frame cropped to the same shape so a grid stays tidy.
 const POSTER_MIN = 0.5;
 const posterShare = (items) => (items.length ? items.filter((i) => i.posterUrl).length / items.length : 0);
-const itemTile = (i, poster = false) => tile({ href: itemHref(i), title: i.title, hover: [i.title, i.rating ? `★ ${i.rating.toFixed(1)}` : null, i.genres].filter(Boolean).join(' · '), sub: itemSub(i), img: poster ? i.posterUrl || i.imageUrl : i.imageUrl, badge: i.isNew ? 'NEW' : null, portrait: poster });
+const itemTile = (i, poster = false) => tile({ href: itemHref(i), title: i.title, hover: [i.title, i.rating ? `★ ${i.rating.toFixed(1)}` : null, i.genres].filter(Boolean).join(' · '), sub: itemSub(i), img: poster ? i.posterUrl || i.imageUrl : i.imageUrl, badge: i.isNew ? 'NEW' : null, portrait: poster,
+  progress: i.progress, left: i.leftSeconds ? formatLeft(i.leftSeconds) : null, watched: i.watched });
 const continueTile = (c) => tile({
   href: `#/watch/${c.mediaId}`, title: c.title, img: c.imageUrl,
   sub: c.nextUp ? `Up next · ${c.subtitle}` : [c.subtitle, fmtLeft(c.positionSeconds, c.durationSeconds)].filter(Boolean).join(' · '),
   progress: c.durationSeconds ? c.positionSeconds / c.durationSeconds : 0,
+  left: c.durationSeconds && c.durationSeconds > c.positionSeconds && !c.nextUp ? formatLeft(c.durationSeconds - c.positionSeconds) : null,
 });
 
 function row(title, tiles, seeAll, poster) {
@@ -390,7 +412,7 @@ function heroCarousel(items) {
 }
 
 // ================================================================ system status
-const fmtBytes = (n) => (n >= 1e9 ? `${(n / 1e9).toFixed(1)} GB` : n >= 1e6 ? `${Math.round(n / 1e6)} MB` : `${Math.round(n / 1e3)} KB`);
+const fmtBytes = formatBytes;
 const fmtUp = (s) => (s >= 86400 ? `${Math.floor(s / 86400)}d ${Math.floor(s % 86400 / 3600)}h` : s >= 3600 ? `${Math.floor(s / 3600)}h ${Math.floor(s % 3600 / 60)}m` : `${Math.max(1, Math.floor(s / 60))}m`);
 
 async function mountSystem(body) {
@@ -696,7 +718,7 @@ function episodeRow(e, info) {
   return el;
 }
 
-// ================================================================ player
+// ================================================================ player (see player.js)
 let activePlayback = null;
 let playerToken = 0; // bumped on every navigation so a slow start can tell it was abandoned
 function teardownPlayer() {
@@ -705,473 +727,6 @@ function teardownPlayer() {
   const ap = activePlayback;
   activePlayback = null;
   ap.dispose();
-}
-
-// A controller owns whatever must be cleaned up for the current stream (HLS session, timers, listeners).
-function newController() {
-  const cleanups = [];
-  return { onStop: (fn) => cleanups.push(fn), stop() { while (cleanups.length) { try { cleanups.pop()(); } catch { /* best effort */ } } } };
-}
-
-// Our own transport controls. The browser's native ones can't be trusted here: Safari labels a still-growing (copied) stream
-// "Live Broadcast" and shows a duration that isn't the movie's, so the bar is driven by the duration the server already knows.
-function buildControls(video, stage, f, wake) {
-  const fmt = (t) => {
-    t = Math.max(0, Math.floor(t || 0));
-    const hh = Math.floor(t / 3600), mm = Math.floor(t % 3600 / 60), ss = t % 60;
-    return (hh ? `${hh}:${String(mm).padStart(2, '0')}` : `${mm}`) + `:${String(ss).padStart(2, '0')}`;
-  };
-  const total = () => f.durationSeconds || (Number.isFinite(video.duration) ? video.duration : 0);
-  const btn = (name, label, onclick) => h('button', { class: 'cbtn', type: 'button', title: label, 'aria-label': label, onclick }, icon(name));
-  const playBtn = btn('play', 'Play / pause', () => (video.paused ? video.play() : video.pause()));
-  const swap = (b, name) => b.replaceChildren(icon(name));
-  const skip = (dt) => { seekTo(video.currentTime + dt); wake(); };
-  const muteBtn = btn('volume', 'Mute', () => { video.muted = !video.muted; });
-  // playback speed (the choice is kept for next time) and remembered volume
-  const SPEEDS = [0.5, 0.75, 1, 1.25, 1.5, 2];
-  const speedBtn = h('button', { class: 'cbtn speed', type: 'button', title: 'Playback speed ( < > )', 'aria-label': 'Playback speed', 'aria-haspopup': 'true' }, '1×');
-  const speedMenu = h('div', { class: 'qmenu cc-menu speed-menu hidden', role: 'menu' });
-  const setSpeed = (r, remember = true) => {
-    r = SPEEDS.includes(r) ? r : 1;
-    video.defaultPlaybackRate = r; video.playbackRate = r;
-    speedBtn.textContent = `${r}×`;
-    if (remember) setPref('speed', String(r));
-  };
-  const stepSpeed = (d) => { const i = SPEEDS.indexOf(video.playbackRate); setSpeed(SPEEDS[Math.min(SPEEDS.length - 1, Math.max(0, (i < 0 ? 2 : i) + d))]); toast(`Speed ${video.playbackRate}×`); };
-  speedBtn.addEventListener('click', () => {
-    speedMenu.replaceChildren(...SPEEDS.map((r) => h('button', { type: 'button', role: 'menuitemradio', class: video.playbackRate === r ? 'on' : '', 'aria-checked': String(video.playbackRate === r),
-      onclick: () => { setSpeed(r); speedMenu.classList.add('hidden'); } }, h('span', {}, r === 1 ? 'Normal' : `${r}×`), h('small', {}, video.playbackRate === r ? '✓' : ''))));
-    speedMenu.classList.toggle('hidden'); wake();
-  });
-  stage.addEventListener('click', (e) => { if (!speedMenu.contains(e.target) && !speedBtn.contains(e.target)) speedMenu.classList.add('hidden'); });
-  setSpeed(parseFloat(pref('speed')), false);
-  if (pref('rememberVolume') === 'on') { video.volume = Math.min(1, Math.max(0, parseFloat(pref('volume')) || 1)); video.muted = pref('muted') === 'on'; }
-  const fsBtn = btn('expand', 'Full screen', () => toggleFullscreen());
-  const cur = h('span', { class: 'time' }, '0:00'), dur = h('span', { class: 'time' }, fmt(total()));
-  const buf = h('i', { class: 'buf' }), fill = h('i', { class: 'fill' }), knob = h('b', { class: 'knob' });
-  const preview = trickplayPreview(f);
-  const hint = h('div', { class: 'scrub-hint hidden' }, preview.el);
-  const bar = h('div', { class: 'seekbar', role: 'slider', tabindex: '0', 'aria-label': 'Seek', 'aria-valuemin': '0' }, buf, fill, knob, hint);
-  const vol = h('input', { class: 'vol', type: 'range', min: '0', max: '1', step: '0.05', value: String(video.volume), 'aria-label': 'Volume' });
-  vol.addEventListener('input', () => { video.volume = parseFloat(vol.value); video.muted = false; });
-
-  function seekTo(t) {
-    const d = total();
-    let to = Math.max(0, d ? Math.min(d - 0.5, t) : t);
-    const r = video.seekable;                       // a copied stream can only be entered where it has been produced so far
-    if (r && r.length && to > r.end(r.length - 1)) to = r.end(r.length - 1);
-    video.currentTime = to;
-  }
-  function toggleFullscreen() {
-    if (document.fullscreenElement || document.webkitFullscreenElement) (document.exitFullscreen || document.webkitExitFullscreen).call(document);
-    else if (stage.requestFullscreen || stage.webkitRequestFullscreen) (stage.requestFullscreen || stage.webkitRequestFullscreen).call(stage);
-    else if (video.webkitEnterFullscreen) video.webkitEnterFullscreen(); // iPhone only fullscreens the video element itself
-  }
-  let scrubbing = false, scrubT = 0;
-  const frac = (e) => { const b = bar.getBoundingClientRect(); return Math.min(1, Math.max(0, (e.clientX - b.left) / b.width)); };
-  bar.addEventListener('pointerdown', (e) => { scrubbing = true; bar.setPointerCapture(e.pointerId); scrubT = frac(e) * total(); paint(); });
-  bar.addEventListener('pointermove', (e) => {
-    const x = frac(e), t = x * total();
-    preview.show(t, fmt(t)); hint.style.left = `${x * 100}%`; hint.classList.remove('hidden');
-    if (scrubbing) { scrubT = t; paint(); }
-  });
-  bar.addEventListener('pointerleave', () => hint.classList.add('hidden'));
-  bar.addEventListener('pointerup', () => { if (scrubbing) { scrubbing = false; seekTo(scrubT); wake(); } });
-  bar.addEventListener('keydown', (e) => { if (e.key === 'ArrowLeft') { skip(-10); e.preventDefault(); e.stopPropagation(); } else if (e.key === 'ArrowRight') { skip(10); e.preventDefault(); e.stopPropagation(); } });
-
-  function paint() {
-    const d = total(), t = scrubbing ? scrubT : video.currentTime;
-    const p = d ? Math.min(100, (t / d) * 100) : 0;
-    fill.style.width = `${p}%`; knob.style.left = `${p}%`;
-    cur.textContent = fmt(t); dur.textContent = fmt(d);
-    bar.setAttribute('aria-valuemax', String(Math.round(d))); bar.setAttribute('aria-valuenow', String(Math.round(t)));
-    const r = video.buffered;
-    let end = 0;
-    for (let i = 0; i < r.length; i++) if (r.start(i) <= t + 1 && r.end(i) > end) end = r.end(i);
-    buf.style.width = `${d ? Math.min(100, (Math.max(end, t) / d) * 100) : 0}%`;
-  }
-  video.addEventListener('timeupdate', paint);
-  video.addEventListener('progress', paint);
-  video.addEventListener('durationchange', paint);
-  video.addEventListener('play', () => swap(playBtn, 'pause'));
-  video.addEventListener('pause', () => swap(playBtn, 'play'));
-  video.addEventListener('volumechange', () => {
-    if (pref('rememberVolume') === 'on') { store('pref:volume', String(video.volume)); store('pref:muted', video.muted ? 'on' : 'off'); }
-    swap(muteBtn, video.muted || video.volume === 0 ? 'mute' : 'volume'); vol.value = video.muted ? '0' : String(video.volume);
-  });
-  // click the picture to pause/resume, double-click for full screen (not touch: a tap just reveals the controls)
-  video.addEventListener('click', () => { if (matchMedia('(hover: hover)').matches) (video.paused ? video.play() : video.pause()); });
-  video.addEventListener('dblclick', toggleFullscreen);
-  let grow;
-  const el = h('div', { class: 'controls' }, bar,
-    h('div', { class: 'crow' }, playBtn, btn('rew', 'Skip back', () => skip(-skipSeconds())), btn('fwd', 'Skip forward', () => skip(skipSeconds())), cur, h('span', { class: 'sep' }, '/'), dur,
-      grow = h('span', { class: 'grow' }), speedBtn, muteBtn, vol, fsBtn));
-  paint();
-  stage.append(speedMenu);
-  return { el, skip, toggleFullscreen, slot: grow, toggleCaptions: null, stepSpeed };
-}
-
-// ---- captions (WebVTT from the server: text tracks inside the file, or .srt/.vtt files next to it)
-const LANG_ALIASES = { eng: 'en', english: 'en', spa: 'es', spanish: 'es', fre: 'fr', fra: 'fr', french: 'fr', ger: 'de', deu: 'de', german: 'de', ita: 'it', italian: 'it',
-  por: 'pt', portuguese: 'pt', jpn: 'ja', japanese: 'ja', kor: 'ko', korean: 'ko', chi: 'zh', zho: 'zh', chinese: 'zh', rus: 'ru', russian: 'ru', dut: 'nl', nld: 'nl', dutch: 'nl',
-  swe: 'sv', swedish: 'sv', pol: 'pl', polish: 'pl', tur: 'tr', turkish: 'tr', ara: 'ar', arabic: 'ar', hin: 'hi', hindi: 'hi' };
-const langKey = (l) => { const k = String(l || '').toLowerCase().split(/[-_ .]/)[0]; return LANG_ALIASES[k] || k.slice(0, 2); };
-
-async function setupCaptions(video, stage, f, ui, wake, burnIn) {
-  const tracks = (await api(`/api/media/${f.mediaId}/captions`)).tracks || [];
-  if (!tracks.length) return; // nothing to show: no button
-  const btn = h('button', { class: 'cbtn', type: 'button', title: 'Captions (C)', 'aria-label': 'Captions', 'aria-haspopup': 'true' }, icon('cc'));
-  const menu = h('div', { class: 'qmenu cc-menu hidden', role: 'menu' });
-  let active = null;
-  const src = (t) => `/api/media/${f.mediaId}/captions/${t.id}.vtt`;
-  function select(t) {
-    video.querySelectorAll('track').forEach((x) => x.remove());
-    for (const x of video.textTracks) x.mode = 'disabled';
-    if (PLAY_EXTRA.burnSubtitle != null && (!t || t.supported !== false)) burnIn(null);    // leaving a burned-in track: back to normal playback
-    active = t ? t.id : null;
-    btn.classList.toggle('on', !!t);
-    if (t) {
-      const lang = /^[a-z]{2,3}$/i.test(t.language || '') ? t.language : 'und';
-      const el = h('track', { kind: 'subtitles', label: t.label, srclang: lang, src: src(t), default: true });
-      el.addEventListener('error', () => { toast('Could not load those captions', true); select(null); });
-      video.append(el);
-      el.track.mode = 'showing';
-    }
-  }
-  function renderMenu() {
-    menu.replaceChildren(...[{ id: null, label: 'Off' }, ...tracks].map((t) => {
-      const picture = t.supported === false;
-      const burnable = picture && APP.allowTranscoding && /^e\d+$/.test(t.id || '');
-      const on = picture ? PLAY_EXTRA.burnSubtitle === Number((t.id || '').slice(1)) : active === t.id && PLAY_EXTRA.burnSubtitle == null;
-      return h('button', { type: 'button', role: 'menuitemradio', 'aria-checked': String(on), class: on ? 'on' : '', disabled: picture && !burnable ? true : null,
-        onclick: () => {
-          menu.classList.add('hidden');
-          if (burnable) { select(null); active = t.id; btn.classList.add('on'); burnIn(Number(t.id.slice(1))); return; }   // drawn onto the picture: needs a re-encode
-          select(t.id ? t : null);
-        } }, h('span', {}, t.label, t.forced ? ' (forced)' : ''), h('small', {}, on ? '✓' : picture ? (burnable ? 'burn in' : 'picture-based') : t.source === 'file' ? 'file' : ''));
-    }));
-  }
-  btn.addEventListener('click', () => { renderMenu(); menu.classList.toggle('hidden'); wake(); });
-  stage.addEventListener('click', (e) => { if (!menu.contains(e.target) && !btn.contains(e.target)) menu.classList.add('hidden'); });
-  ui.slot.after(btn);
-  stage.append(menu);
-  const usable = tracks.filter((t) => t.supported !== false);
-  const originalSelect = select;
-  ui.toggleCaptions = () => {
-    if (active) { select(null); toast('Captions off'); return; }
-    const t = pickDefault(usable, true) || usable[0];
-    if (t) { select(t); toast(`Captions: ${t.label}`); } else toast('No captions available');
-  };
-  const pick = pref('cc') === 'off' ? null : pickDefault(usable, pref('cc') === 'always');
-  if (pick) select(pick);
-}
-
-function pickDefault(usable, fallbackToAny) {
-  const want = langKey(pref('ccLang'));
-  const inLang = usable.filter((t) => langKey(t.language || t.label) === want);
-  return inLang.find((t) => !t.forced) || inLang[0] || (fallbackToAny ? usable.find((t) => !t.forced) || usable[0] : null) || null;
-}
-
-const MODE_LABEL = { direct: 'Direct play', remux: 'Direct stream', transcode: 'Transcoding' };
-const QUALITIES = [
-  { name: '1080p', width: 1920, mbps: 8 },
-  { name: '720p', width: 1280, mbps: 4 },
-  { name: '480p', width: 854, mbps: 1.8 },
-  { name: '360p', width: 640, mbps: 0.9 },
-];
-// Offer only qualities the source can actually fill (never upscale).
-const qualitiesFor = (f) => QUALITIES.filter((q) => f.width && q.width <= f.width * 1.05);
-const savedQuality = () => store('quality') || 'original';
-
-// Choices that need the server to prepare the stream (reset for every title).
-let PLAY_EXTRA = { audioIndex: null, burnSubtitle: null };
-const defaultAudioIndex = (f) => ((f.audio || []).find((a) => a.isDefault) || (f.audio || [])[0] || {}).index;
-// A track in your preferred language (Settings → Playback) wins over the file's default, when there is one.
-function preferredAudioIndex(f) {
-  const want = langKey(pref('audioLang'));
-  if (!want || (f.audio || []).length < 2) return null;
-  const hit = f.audio.find((a) => langKey(a.language) === want);
-  return hit && hit.index !== defaultAudioIndex(f) ? hit.index : null;
-}
-
-async function showPlayer(id, params) {
-  const f = await api(`/api/media/${encodeURIComponent(id)}/play?${capsQuery()}`);
-  PLAY_EXTRA = { audioIndex: preferredAudioIndex(f), burnSubtitle: null };
-  const token = playerToken;
-  if (token !== playerToken) return;
-  document.title = `${f.title} · ${APP.name}`;
-  document.body.classList.add('watching');
-
-  const start = params.has('t') ? Math.max(0, parseFloat(params.get('t')) || 0) : pref('resume') === 'start' ? 0 : f.resumeSeconds;
-  const video = h('video', { autoplay: pref('autoplay') === 'on', playsinline: true, preload: 'auto' });
-  const spinner = h('div', { class: 'buffering hidden' }, h('i'));
-  const chip = h('button', { class: 'mode-chip', type: 'button', title: 'How this is being played' }, 'Starting…');
-  const options = qualitiesFor(f);
-  const qBtn = options.length && APP.allowTranscoding ? h('button', { class: 'round', type: 'button', title: 'Quality', 'aria-label': 'Quality', 'aria-haspopup': 'true' }, icon('sliders')) : null;
-  const qMenu = h('div', { class: 'qmenu hidden', role: 'menu' });
-  const reason = h('div', { class: 'reason hidden' }, f.reason);
-  const nextBtn = h('a', { class: 'btn next-btn hidden', href: f.nextMediaId ? `#/watch/${f.nextMediaId}` : '#' }, icon('next'), h('span', {}, 'Next episode', f.nextTitle ? h('small', {}, f.nextTitle) : null));
-  const back = h('button', { class: 'round', type: 'button', 'aria-label': 'Back', onclick: () => leave() }, icon('back'));
-  const heading = f.title.includes(' – ') ? [f.title.split(' – ')[0], h('small', {}, f.title.split(' – ').slice(1).join(' – '))] : f.title;
-  const stage = h('div', { class: 'player' }, video, spinner,
-    h('div', { class: 'player-top' }, back, h('div', { class: 'player-title' }, heading), chip, qBtn), reason, qMenu, nextBtn);
-  setView(stage);
-  window.scrollTo(0, 0);
-  const wakeRef = () => wake();
-  const ui = buildControls(video, stage, f, wakeRef);
-  stage.append(ui.el);
-  // Optional extras: none of them may ever hold up playback.
-  setupCaptions(video, stage, f, ui, wakeRef, (idx) => reloadPlayback({ burnSubtitle: idx })).catch(() => {});
-  setupSkip(video, stage, f, wakeRef).catch(() => {});
-  setupAudio(stage, f, ui, wakeRef, () => PLAY_EXTRA.audioIndex ?? defaultAudioIndex(f), (idx) => reloadPlayback({ audioIndex: idx }));
-  setupAirPlay(video, ui);
-  setupCast(video, f, ui, () => video.currentTime || 0);
-
-  function leave() { if (history.length > 1) history.back(); else location.hash = '#/'; }
-  let quality = savedQuality();
-  if (quality !== 'original' && !options.some((q) => q.name === quality)) quality = 'original'; // saved choice doesn't fit this file
-  function report(mode, text) {
-    chip.textContent = (MODE_LABEL[mode] || mode) + (quality !== 'original' && mode === 'transcode' ? ` · ${quality}` : '');
-    reason.textContent = text || '';
-  }
-  report(f.mode, f.reason);
-  chip.addEventListener('click', () => reason.classList.toggle('hidden'));
-
-  // ---- progress: saved to the server every 10s, on pause, and as the tab closes (so it resumes on any device)
-  const url = `/api/media/${f.mediaId}/progress`;
-  const body = () => {
-    const d = f.durationSeconds || (Number.isFinite(video.duration) ? video.duration : undefined);
-    return JSON.stringify({ position: video.currentTime, duration: d });
-  };
-  const canSave = () => Number.isFinite(video.currentTime) && video.currentTime > 5;
-  const saveNow = () => { if (canSave()) fetch(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: body(), keepalive: true }).catch(() => {}); };
-  const saveBeacon = () => { if (canSave()) { try { navigator.sendBeacon(url, new Blob([body()], { type: 'application/json' })); } catch { /* ignore */ } } };
-  const saveTimer = setInterval(() => { if (!video.paused) saveNow(); }, 10000);
-
-  // ---- idle UI: hide the title bar while playing
-  let idleTimer = null;
-  const wake = () => { stage.classList.remove('idle'); clearTimeout(idleTimer); idleTimer = setTimeout(() => { if (!video.paused) stage.classList.add('idle'); }, 3200); };
-  ['mousemove', 'touchstart', 'keydown'].forEach((ev) => stage.addEventListener(ev, wake, { passive: true }));
-  video.addEventListener('play', () => { stage.classList.add('playing'); wake(); });
-  video.addEventListener('pause', () => { stage.classList.remove('playing', 'idle'); saveNow(); });
-  video.addEventListener('waiting', () => spinner.classList.remove('hidden'));
-  ['playing', 'canplay', 'seeked'].forEach((ev) => video.addEventListener(ev, () => spinner.classList.add('hidden')));
-  wake();
-
-  // ---- next episode
-  video.addEventListener('timeupdate', () => {
-    const d = f.durationSeconds || video.duration;
-    if (f.nextMediaId && d && d - video.currentTime < 30) nextBtn.classList.remove('hidden'); else nextBtn.classList.add('hidden');
-  });
-  video.addEventListener('ended', () => {
-    fetch(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ position: f.durationSeconds || video.duration, duration: f.durationSeconds || video.duration, watched: true }), keepalive: true }).catch(() => {});
-    if (f.nextMediaId && pref('autonext') === 'on') location.hash = `#/watch/${f.nextMediaId}`; else leave();
-  });
-
-  // ---- quality menu: pick a resolution; playback continues from the same moment
-  function renderQualityMenu() {
-    const rows = [{ name: 'original', label: `Original${resLabel(f.width, f.height) ? ` (${resLabel(f.width, f.height)})` : ''}`, note: 'best available' }]
-      .concat(options.map((q) => ({ name: q.name, label: q.name, note: `up to ${q.mbps} Mbps` })));
-    qMenu.replaceChildren(...rows.map((r) => h('button', { type: 'button', role: 'menuitemradio', 'aria-checked': String(r.name === quality), class: r.name === quality ? 'on' : '', onclick: () => chooseQuality(r.name) },
-      h('span', {}, r.label), h('small', {}, r.name === quality ? '✓' : r.note))));
-  }
-  // Restart playback from the same moment, optionally changing the audio track / subtitles burned in / quality.
-  async function reloadPlayback(change, notice = 'Switching…') {
-    Object.assign(PLAY_EXTRA, change);
-    const at = video.currentTime || 0, wasPlaying = !video.paused;
-    saveNow();
-    ctl.stop(); // ends the current stream (direct listeners or the server-side session)
-    video.removeAttribute('src'); video.load();
-    await sleep(80); // let the element flush events queued by clearing the source
-    report('remux', notice);
-    try {
-      if (quality === 'original') await startPlayback(video, f, report, ctl, at);
-      else await startHls(video, f, report, ctl, at, false, quality);
-      if (wasPlaying) video.play().catch(() => {});
-    } catch (e) { report('error', e.message); toast(e.message || 'Could not switch', true); }
-  }
-  async function chooseQuality(name) {
-    qMenu.classList.add('hidden');
-    if (name === quality) return;
-    quality = name; store('quality', name);
-    await reloadPlayback({}, 'Switching quality…');
-  }
-  if (qBtn) {
-    qBtn.addEventListener('click', () => { renderQualityMenu(); qMenu.classList.toggle('hidden'); wake(); });
-    stage.addEventListener('click', (e) => { if (!qMenu.contains(e.target) && e.target !== qBtn && !qBtn.contains(e.target)) qMenu.classList.add('hidden'); });
-  }
-
-  // ---- keyboard
-  const onKey = (e) => {
-    if (e.target.closest && e.target.closest('input, textarea, select')) return;
-    const seek = (dt) => ui.skip(dt);
-    switch (e.key) {
-      case ' ': case 'k': e.preventDefault(); if (video.paused) video.play(); else video.pause(); break;
-      case 'ArrowLeft': case 'j': e.preventDefault(); seek(-skipSeconds()); break;
-      case 'ArrowRight': case 'l': e.preventDefault(); seek(skipSeconds()); break;
-      case 'c': if (ui.toggleCaptions) ui.toggleCaptions(); break;
-      case '<': ui.stepSpeed(-1); break;
-      case '>': ui.stepSpeed(1); break;
-      case 'ArrowUp': e.preventDefault(); video.volume = Math.min(1, video.volume + 0.1); break;
-      case 'ArrowDown': e.preventDefault(); video.volume = Math.max(0, video.volume - 0.1); break;
-      case 'm': video.muted = !video.muted; break;
-      case 'f': ui.toggleFullscreen(); break;
-      case 'n': if (f.nextMediaId) location.hash = `#/watch/${f.nextMediaId}`; break;
-      case 'Escape': if (!qMenu.classList.contains('hidden')) qMenu.classList.add('hidden'); else if (!document.fullscreenElement) leave(); break;
-      default: return;
-    }
-    wake();
-  };
-  document.addEventListener('keydown', onKey);
-  window.addEventListener('pagehide', saveBeacon);
-
-  const ctl = newController();
-  activePlayback = {
-    dispose() {
-      clearInterval(saveTimer); clearTimeout(idleTimer);
-      document.removeEventListener('keydown', onKey);
-      window.removeEventListener('pagehide', saveBeacon);
-      saveNow(); // final position
-      try { video.pause(); } catch { /* ignore */ }
-      ctl.stop(); // stops the HLS session => the server kills ffmpeg
-      video.removeAttribute('src');
-      video.load(); // aborts the in-flight media request so the server stops streaming
-    },
-  };
-
-  try {
-    if (quality !== 'original') await startHls(video, f, report, ctl, start, false, quality);
-    else await startPlayback(video, f, report, ctl, start);
-  }
-  catch (e) { if (token === playerToken) { report('error', e.message); toast(e.message || 'Playback failed', true); } return; }
-  if (token !== playerToken) ctl.stop(); // navigated away while the stream was starting
-}
-
-// ---- diagnostics: tell the server why playback fell back, so a "why did this transcode?" never needs guessing
-function reportIssue(kind, f, detail) {
-  try {
-    const probe = document.createElement('video');
-    const err = ($('video') || {}).error;
-    fetch('/api/client-events', {
-      method: 'POST', headers: { 'content-type': 'application/json' }, keepalive: true,
-      body: JSON.stringify({ kind, mediaId: f ? f.mediaId : null, mode: f ? f.mode : null, detail: String(detail || '').slice(0, 300),
-        mediaError: err ? `${err.code}:${String(err.message || '').slice(0, 120)}` : null,
-        nativeHls: !!probe.canPlayType('application/vnd.apple.mpegurl'), mse: !!window.MediaSource, caps: CAPS }),
-    }).catch(() => {});
-  } catch { /* diagnostics must never break playback */ }
-}
-
-// "The video can't be decoded" is only knowable once frames should be flowing: some browsers (notably Safari's native HLS)
-// report videoWidth 0 until the first frame renders, so checking at loadedmetadata wrongly condemned working streams.
-function watchDecoding(video, ctl, onFail) {
-  let timer;
-  const onPlaying = () => {
-    clearTimeout(timer);
-    timer = setTimeout(() => { if (!video.paused && video.currentTime > 0.5 && video.videoWidth === 0) onFail(); }, 3000);
-  };
-  video.addEventListener('playing', onPlaying);
-  ctl.onStop(() => { clearTimeout(timer); video.removeEventListener('playing', onPlaying); });
-}
-
-// A copied stream grows as the encoder works, so a resume point may not exist yet: seek once it does.
-function seekWhenReady(video, ctl, t, report) {
-  let n = 0;
-  const timer = setInterval(() => {
-    n++;
-    const r = video.seekable;
-    if (r && r.length && r.end(r.length - 1) >= t + 2) { clearInterval(timer); video.currentTime = t; }
-    else if (n > 240) clearInterval(timer); // ~2 minutes: give up and play from the start
-  }, 500);
-  ctl.onStop(() => clearInterval(timer));
-}
-
-// Cheapest path first: direct play, then direct stream (HLS with the video copied), then transcode. Each step also
-// acts as the fallback for the one before it, in case a browser claims support it doesn't actually have.
-async function startPlayback(video, f, report, ctl, start) {
-  // Another audio track, or subtitles drawn onto the picture, can't be done by the browser alone: the server prepares a stream.
-  if (f.mode !== 'direct' || PLAY_EXTRA.audioIndex != null || PLAY_EXTRA.burnSubtitle != null) { await startHls(video, f, report, ctl, start, false); return; }
-  report('direct', f.reason); // (also resets the label after a quality switch)
-
-  let fellBack = false;
-  const fallBack = (why) => {
-    if (fellBack) return;
-    fellBack = true;
-    report('remux', `${why}, switching to a direct stream…`);
-    startHls(video, f, report, ctl, video.currentTime || start, false).catch((e) => report('error', e.message));
-  };
-  // Clearing src (e.g. when switching quality) queues an "empty src" error event: only a failure if a source is actually loaded.
-  const onError = () => { if (video.currentSrc) { reportIssue('direct-error', f, 'media error during direct play'); fallBack('Direct play failed'); } };
-  const onMeta = () => { if (start > 1 && start < (video.duration || Infinity) - 5) video.currentTime = start; };
-  // Audio can play while the video track is undecodable (videoWidth stays 0): that is a failure too, but only judge it once playing.
-  watchDecoding(video, ctl, () => { reportIssue('video-not-decoded', f, 'direct play: audio plays but no video frames'); fallBack("This browser couldn't decode the video"); });
-  video.addEventListener('error', onError);
-  video.addEventListener('loadedmetadata', onMeta, { once: true });
-  ctl.onStop(() => { video.removeEventListener('error', onError); video.removeEventListener('loadedmetadata', onMeta); });
-  video.src = f.streamUrl;
-}
-
-async function startHls(video, f, report, ctl, resumeAt, forceTranscode, quality) {
-  report('remux', 'Preparing stream…');
-  const res = await fetch('/api/hls/start', {
-    method: 'POST', headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ mediaId: f.mediaId, video: CAPS.v, audio: CAPS.a, containers: CAPS.c, forceTranscode, startSeconds: resumeAt > 1 ? resumeAt : 0, quality: quality && quality !== 'original' ? quality : null,
-      audioIndex: PLAY_EXTRA.audioIndex ?? null, burnSubtitle: PLAY_EXTRA.burnSubtitle ?? null }),
-  });
-  if (!res.ok) {
-    let detail = '';
-    try { detail = (await res.json()).detail || ''; } catch { /* not json */ }
-    throw new Error(`Could not start streaming (${res.status}). ${detail}`.trim());
-  }
-  const s = await res.json();
-  const base = `/api/hls/${s.sessionId}`;
-
-  // Everything below is registered for cleanup immediately so no path can leak the server-side ffmpeg.
-  const stopSession = () => { try { navigator.sendBeacon(`${base}/stop`); } catch { /* ignore */ } };
-  const ping = setInterval(() => fetch(`${base}/ping`, { method: 'POST' }).catch(() => {}), 15000);
-  window.addEventListener('pagehide', stopSession);
-  let hls = null;
-  let retried = false;
-  // A copied stream that the browser then can't decode is retried once as a real transcode.
-  const retryAsTranscode = (why) => {
-    reportIssue(forceTranscode || retried || s.mode !== 'remux' ? 'playback-error' : 'retry-as-transcode', f, why);
-    if (forceTranscode || retried || s.mode !== 'remux') { report('error', `Playback error: ${why}`); return; }
-    retried = true;
-    const at = video.currentTime || resumeAt;
-    ctl.stop();
-    startHls(video, f, report, ctl, at, true, quality).catch((e) => report('error', e.message));
-  };
-  // Segmented transcodes can start anywhere (the playlist is complete). Copied streams grow as they're produced, so resume later.
-  const lateSeek = resumeAt > 1 && !s.vod;
-  const onMeta = () => { if (resumeAt > 1 && s.vod && !hls) video.currentTime = resumeAt; }; // native HLS (hls.js uses startPosition)
-  if (s.mode === 'remux') watchDecoding(video, ctl, () => retryAsTranscode("the video couldn't be decoded"));
-  const onNativeError = () => { if (video.currentSrc) retryAsTranscode('the stream could not be played (native HLS)'); };
-  video.addEventListener('loadedmetadata', onMeta, { once: true });
-  ctl.onStop(() => {
-    clearInterval(ping);
-    window.removeEventListener('pagehide', stopSession);
-    video.removeEventListener('loadedmetadata', onMeta);
-    video.removeEventListener('error', onNativeError);
-    if (hls) hls.destroy();
-    fetch(`${base}/stop`, { method: 'POST', keepalive: true }).catch(() => {});
-  });
-
-  // Safari plays HLS (including HEVC in fragmented MP4) natively; its MSE path does not handle that reliably, so prefer native there.
-  const nativeHls = !!video.canPlayType('application/vnd.apple.mpegurl');
-  if (nativeHls && (IS_SAFARI || !(window.Hls && Hls.isSupported()))) {
-    video.addEventListener('error', onNativeError);
-    video.src = s.playlistUrl;
-  } else if (window.Hls && Hls.isSupported()) {
-    // A far seek makes the server restart its encoder there, so a segment can legitimately take a while: don't time out early.
-    const slow = { default: { maxTimeToFirstByteMs: 60000, maxLoadTimeMs: 120000, timeoutRetry: { maxNumRetry: 2, retryDelayMs: 0, maxRetryDelayMs: 0 }, errorRetry: { maxNumRetry: 3, retryDelayMs: 500, maxRetryDelayMs: 4000 } } };
-    hls = new Hls({ startPosition: resumeAt > 1 && s.vod ? resumeAt : -1, fragLoadPolicy: slow });
-    hls.on(Hls.Events.ERROR, (_e, d) => { if (d.fatal) retryAsTranscode(`${d.type}/${d.details}${d.response ? ' http ' + d.response.code : ''}`); });
-    hls.loadSource(s.playlistUrl);
-    hls.attachMedia(video);
-  } else {
-    throw new Error('This browser cannot play HLS.');
-  }
-  if (lateSeek) seekWhenReady(video, ctl, resumeAt, report);
-  report(s.mode, s.reason || (s.mode === 'remux' ? 'Direct stream (video untouched)' : 'Transcoding'));
 }
 
 // ================================================================ search box + shortcuts + boot

@@ -5,6 +5,7 @@ using MediaServer.Api.Library;
 using MediaServer.Api.Maintenance;
 using MediaServer.Api.LiveTv;
 using MediaServer.Api.Endpoints;
+using MediaServer.Api.Hosting;
 using MediaServer.Api.Media;
 using MediaServer.Api.Metadata;
 using MediaServer.Api.Probing;
@@ -83,6 +84,15 @@ if (builder.Configuration.GetValue("Https:Enabled", false))
 builder.Services.AddSingleton(new HttpsStatus(httpsCert is not null, httpsPort, httpsCert is not null && builder.Configuration["Https:CertificatePath"] is not { Length: > 0 }, httpsCert));
 
 var app = builder.Build();
+app.UseApiErrorHandling();
+// An API address that matches nothing answers with a small JSON 404 rather than an empty page.
+app.Use(async (ctx, next) =>
+{
+    await next();
+    if (ctx.Response.StatusCode == StatusCodes.Status404NotFound && !ctx.Response.HasStarted && ctx.Response.ContentLength is null && string.IsNullOrEmpty(ctx.Response.ContentType) && ctx.Request.Path.StartsWithSegments("/api"))
+        await ctx.Response.WriteAsJsonAsync(new { error = "Not found" });
+});
+app.UseMiddleware<MediaServer.Api.Hosting.SecurityHeadersMiddleware>();
 app.Services.GetRequiredService<Database>().Migrate();
 var sealedNow = SecretMigrator.Run(app.Services.GetRequiredService<Database>(), app.Services.GetRequiredService<SecretBox>());   // encrypt anything an older version left readable
 if (sealedNow != (0, 0)) app.Logger.LogInformation("Encrypted {Settings} saved settings and {Channels} channel entries that were stored as plain text", sealedNow.Settings, sealedNow.Channels);
@@ -101,6 +111,12 @@ app.UseStaticFiles(); // the web client (wwwroot/): public, it contains no data
 app.UseMiddleware<AuthMiddleware>();
 
 app.MapGet("/health", () => Results.Ok(new { status = "ok" }));
+// Readiness: can the server actually do its job (reach its database)? Used by orchestrators; public and detail-free.
+app.MapGet("/health/ready", (Database db) =>
+{
+    try { using var c = db.Open(); return Database.Scalar(c, "SELECT 1") is not null ? Results.Ok(new { status = "ready" }) : Results.StatusCode(503); }
+    catch (Exception ex) when (ex is Microsoft.Data.Sqlite.SqliteException or IOException) { return Results.StatusCode(503); }
+});
 
 // The web app manifest (what "install this app" uses). Public, like the page itself; the name follows the server-name setting.
 app.MapGet("/manifest.webmanifest", (AuthService auth) => Results.Json(new

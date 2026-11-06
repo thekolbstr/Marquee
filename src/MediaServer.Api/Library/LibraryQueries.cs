@@ -9,7 +9,8 @@ namespace MediaServer.Api.Library;
 /// <param name="ImageUrl">Landscape card art: the TMDB backdrop when matched, otherwise a frame from the video.</param>
 /// <param name="HeroUrl">Large banner art (same source, bigger).</param>
 public sealed record ItemSummary(string Type, string Key, string Title, int? Year, long MediaId, string? PosterUrl, string ImageUrl,
-    string HeroUrl, string? Overview, int? EpisodeCount, bool Matched, bool IsNew, double? Rating = null, string? Genres = null);
+    string HeroUrl, string? Overview, int? EpisodeCount, bool Matched, bool IsNew, double? Rating = null, string? Genres = null,
+    double? Progress = null, double? LeftSeconds = null, bool Watched = false, int? Unwatched = null);
 public sealed record ItemList(int Total, IReadOnlyList<ItemSummary> Items);
 
 public sealed record ContinueItem(string Type, long MediaId, string Title, string? Subtitle, string ImageUrl, double PositionSeconds,
@@ -18,7 +19,8 @@ public sealed record ContinueItem(string Type, long MediaId, string Title, strin
 public sealed record MediaFileInfo(long MediaId, string FileName, double? DurationSeconds, string? Container, string? VideoCodec,
     int? Width, int? Height, IReadOnlyList<AudioTrack> Audio, IReadOnlyList<SubtitleTrack> Subtitles, bool DirectPlay,
     string StreamUrl, string? SeriesKey, long? NextMediaId, string Title, string Mode, string Reason,
-    double ResumeSeconds, string ThumbUrl, string? NextTitle);
+    double ResumeSeconds, string ThumbUrl, string? NextTitle, string? VideoProfile = null, double? FrameRate = null, long? BitRate = null,
+    long? SizeBytes = null, string? PixelFormat = null);
 
 public sealed record VersionEntry(long MediaId, string FileName, int? Width, int? Height);
 public sealed record MovieDetail(string Title, int? Year, string? Overview, string? Genres, double? Rating,
@@ -97,16 +99,20 @@ public sealed class LibraryQueries(Database db, MediaServer.Api.Auth.IUserContex
             var rep = Ordered(g).First();
             var meta = g.FirstOrDefault(r => r.Matched) ?? rep;
             var added = g.Max(r => r.MtimeTicks);
+            var sp = SeriesProgress(g.ToList());
             items.Add(new Entry(new ItemSummary("series", g.Key, meta.Display, meta.MYear ?? meta.Year, rep.Id, Poster(meta, rep.Id),
-                Art(meta, rep.Id, 640), Art(meta, rep.Id, 1280), meta.Overview, g.Count(), meta.Matched, now - added < NewWindowTicks, meta.Rating, meta.Genres), added, g.Key));
+                Art(meta, rep.Id, 640), Art(meta, rep.Id, 1280), meta.Overview, g.Count(), meta.Matched, now - added < NewWindowTicks, meta.Rating, meta.Genres,
+                sp.Progress, sp.Left, sp.Watched, sp.Unwatched), added, g.Key));
         }
         // Movies (and unparseable files, so everything stays playable) -> one item per TMDB movie / per file.
         foreach (var g in rows.Where(r => r.Kind != "Episode" && r.Kind != "Recording").GroupBy(r => r.Matched && r.TmdbType == "movie" ? $"tmdb:{r.TmdbId}" : $"file:{r.Id}"))
         {
             var rep = g.OrderBy(r => r.Id).First();
             var added = g.Max(r => r.MtimeTicks);
+            var mp = MovieProgress(g.ToList());
             items.Add(new Entry(new ItemSummary("movie", rep.Id.ToString(CultureInfo.InvariantCulture), rep.Display, rep.MYear ?? rep.Year, rep.Id,
-                Poster(rep, rep.Id), Art(rep, rep.Id, 640), Art(rep, rep.Id, 1280), rep.Overview, null, rep.Matched, now - added < NewWindowTicks, rep.Rating, rep.Genres), added, g.Key));
+                Poster(rep, rep.Id), Art(rep, rep.Id, 640), Art(rep, rep.Id, 1280), rep.Overview, null, rep.Matched, now - added < NewWindowTicks, rep.Rating, rep.Genres,
+                mp.Progress, mp.Left, mp.Watched), added, g.Key));
         }
 
         IEnumerable<Entry> query = items;
@@ -275,7 +281,24 @@ public sealed class LibraryQueries(Database db, MediaServer.Api.Auth.IUserContex
         return new MediaFileInfo(r.Id, System.IO.Path.GetFileName(r.Path), r.Duration, info?.Container, v?.Codec, v?.Width, v?.Height,
             info?.Audio ?? [], info?.Subtitles ?? [], decision.Mode == PlayMode.Direct, $"/stream/{r.Id}",
             r.Kind == "Episode" ? r.SeriesKey : null, next?.Id, title, decision.ModeName, decision.Reason,
-            resume, $"/api/media/{r.Id}/thumb?w=1280", next is null ? null : EpisodeTag(next));
+            resume, $"/api/media/{r.Id}/thumb?w=1280", next is null ? null : EpisodeTag(next),
+            v?.Profile, v?.FrameRate, info?.BitRate, info?.SizeBytes, v?.PixelFormat);
+    }
+
+    /// <summary>Where you are in a group of files that are one title (movie versions): the most recently played one that isn't finished.</summary>
+    private static (double? Progress, double? Left, bool Watched) MovieProgress(IReadOnlyCollection<R> files)
+    {
+        if (files.Any(f => f.Watched)) return (null, null, true);
+        var started = files.Where(f => f.Pos >= ProgressService.MinResumeSeconds && f.Duration is > 0).OrderByDescending(f => f.ProgressAt, StringComparer.Ordinal).FirstOrDefault();
+        return started is null || started.Pos >= started.Duration!.Value ? (null, null, false) : (started.Pos / started.Duration.Value, started.Duration.Value - started.Pos, false);
+    }
+
+    /// <summary>For a show: how much of the episode you're partway through is left, how many episodes you haven't seen, and whether you've seen them all.</summary>
+    private static (double? Progress, double? Left, bool Watched, int Unwatched) SeriesProgress(IReadOnlyCollection<R> episodes)
+    {
+        var unwatched = episodes.Count(e => !e.Watched);
+        var current = episodes.Where(e => !e.Watched && e.Pos >= ProgressService.MinResumeSeconds && e.Duration is > 0).OrderByDescending(e => e.ProgressAt, StringComparer.Ordinal).FirstOrDefault();
+        return current is null || current.Pos >= current.Duration!.Value ? (null, null, unwatched == 0, unwatched) : (current.Pos / current.Duration.Value, current.Duration.Value - current.Pos, false, unwatched);
     }
 
     private static R? NextEpisode(List<R> all, R r)

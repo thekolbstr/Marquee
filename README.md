@@ -80,6 +80,26 @@ locations and the server's own data. `Library__AllowedRoots=/media;/mnt` limits 
   or your own with `Https__CertificatePath` / `Https__CertificatePassword`. `Https__RedirectHttp` and `Https__Hsts` are optional.
 - Passwords are PBKDF2-SHA256 hashes; sessions are stored only as hashes; sign-in attempts are throttled per address.
 
+## The player
+
+Everything adjustable lives in the **cog** at the bottom of the player: quality, audio track, subtitles (including burning in picture subtitles), playback speed, and
+**Stats for nerds** (also the `I` key): the play mode and why, source and output formats, bitrate, decoded vs displayed size, dropped frames, buffer, measured network
+speed, the server's encoder and segment progress, and the browser's capabilities, with a Copy button for bug reports. Posters and thumbnails show how much of a title
+is left ("42m left") and a check mark once it's watched.
+
+**Casting:** Safari uses AirPlay. Chrome uses Chromecast, which only works from a secure page (`https://…` or `localhost`), and the TV fetches the video itself, so it needs
+a plain-http address for this server: set Settings → Network & security → *Address for casting* (for example `http://192.0.2.10:8080`) unless you browse by an address
+the TV can already reach. (Chromecast and AirPlay need real devices to try; they are not covered by the automated tests.)
+
+## Development
+
+    dotnet test                          # server tests (warnings are errors)
+    node --test web-tests/*.test.js      # unit tests for the page's pure logic (shared.js)
+    npx eslint@9 -c eslint.config.mjs 'src/MediaServer.Api/wwwroot/*.js' 'web-tests/*.js'
+
+The server answers `GET /health` (alive) and `GET /health/ready` (database reachable). Responses carry a strict Content-Security-Policy (no inline scripts), and any unexpected
+failure becomes a short JSON error with a reference id that appears in Settings → Logs.
+
 ## Settings
 
 Gear icon → Settings. **This device** settings live in the browser; **Server** settings live in the database and apply to everyone, immediately (no restart).

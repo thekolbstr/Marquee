@@ -1,0 +1,8 @@
+<Project>
+  <!-- Warnings are bugs waiting to happen: the build (and CI) fails on them. -->
+  <PropertyGroup>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <Nullable>enable</Nullable>
+    <LangVersion>latest</LangVersion>
+  </PropertyGroup>
+</Project>

@@ -135,7 +135,7 @@ function playbackPanel(body) {
 
 const SHORTCUTS = [
   ['Space  ·  K', 'Play / pause'], ['←  ·  J', 'Skip back'], ['→  ·  L', 'Skip forward'], ['↑  ↓', 'Volume'], ['M', 'Mute'], ['F  ·  double-click', 'Full screen'],
-  ['C', 'Captions on / off'], ['<  >', 'Slower / faster'], ['N', 'Next episode'], ['Esc', 'Close menu, leave full screen, go back'],
+  ['C', 'Captions on / off'], ['I', 'Stats for nerds'], ['<  >', 'Slower / faster'], ['N', 'Next episode'], ['Esc', 'Close menu, leave full screen, go back'],
   ['[  ]  ·  type a number', 'Live TV: previous / next channel, or jump to a channel'],
 ];
 function shortcutsPanel(body) {

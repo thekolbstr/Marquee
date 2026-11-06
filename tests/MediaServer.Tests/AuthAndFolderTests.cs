@@ -587,7 +587,7 @@ public sealed class FolderEndpointTests : IDisposable
         Assert.Equal(HttpStatusCode.Created, add.StatusCode);
         var list = await c.GetFromJsonAsync<JsonElement>("/api/library/folders");
         Assert.Equal(2, list.GetProperty("folders").GetArrayLength());
-        var id = add.Content.ReadFromJsonAsync<JsonElement>().Result.GetProperty("id").GetInt64();
+        var id = (await add.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("id").GetInt64();
 
         Assert.Equal(HttpStatusCode.NoContent, (await c.PatchAsJsonAsync($"/api/library/folders/{id}", new { enabled = false })).StatusCode);
         Assert.Equal(HttpStatusCode.NoContent, (await c.DeleteAsync($"/api/library/folders/{id}")).StatusCode);

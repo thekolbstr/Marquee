@@ -1,7 +1,7 @@
 // Service worker: makes the app installable and keeps the page shell available offline.
 // It never touches the API, streams or images of your library: those always go to the network.
-const CACHE = 'shell-v1';
-const SHELL = ['/', '/style.css', '/live.css', '/app.js', '/auth.js', '/settings.js', '/live.js', '/vendor/hls.min.js', '/vendor/qrcode.js'];
+const CACHE = 'shell-v2';
+const SHELL = ['/', '/style.css', '/live.css', '/shared.js', '/app.js', '/auth.js', '/settings.js', '/extras.js', '/player.js', '/live.js', '/vendor/hls.min.js', '/vendor/qrcode.js'];
 
 self.addEventListener('install', (e) => { e.waitUntil(caches.open(CACHE).then((c) => c.addAll(SHELL)).then(() => self.skipWaiting())); });
 
