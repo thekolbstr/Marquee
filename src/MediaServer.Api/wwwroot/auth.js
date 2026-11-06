@@ -2,7 +2,8 @@
 
 // Sign-in, first-run setup and the welcome wizard. Functions only: loaded before app.js, which supplies h/api/store/toast/icon at call time.
 
-const AUTH = { enabled: true, user: null, name: null, displayName: null, locked: false };
+const AUTH = { enabled: true, user: null, name: null, displayName: null, role: 'admin', locked: false };
+const isAdmin = () => !AUTH.enabled || AUTH.role === 'admin';
 const greetingName = () => AUTH.name || AUTH.user || '';
 // The little round badge in the header: your initial, linking to your account.
 function paintUserChip() {
@@ -66,15 +67,44 @@ function showLogin(onDone, notice) {
     try {
       const r = await postJson('/api/auth/login', { username: user.value.trim(), password: pw.input.value, remember: remember.checked });
       if (!r.ok) { err.textContent = r.json.error || 'Could not sign in.'; err.classList.remove('hidden'); pw.input.value = ''; pw.input.focus(); return; }
-      AUTH.user = r.json.user; AUTH.name = r.json.name; AUTH.locked = false;
-      paintUserChip();
-      onDone();
+      if (r.json.twoFactorRequired) { showSecondStep(r.json.ticket, remember.checked, onDone); return; }   // right password: now the code
+      await finishSignIn(r.json, onDone);
     } catch { err.textContent = 'Could not reach the server.'; err.classList.remove('hidden'); }
     finally { btn.disabled = false; btn.textContent = 'Sign in'; }
   }
   form.addEventListener('submit', (e) => { e.preventDefault(); submit(); });
   authShell(form);
   user.focus();
+}
+
+// After a successful sign-in: learn who we are (name, role) and carry on.
+async function finishSignIn(json, onDone) {
+  AUTH.user = json.user; AUTH.name = json.name; AUTH.locked = false;
+  try { const st = await (await fetch('/api/auth/state', { cache: 'no-store' })).json(); AUTH.role = st.role || 'user'; AUTH.displayName = st.displayName; AUTH.name = st.name; } catch { /* keep what we have */ }
+  paintUserChip();
+  onDone();
+}
+
+// The second sign-in step: a code from the authenticator app, or one of the recovery codes.
+function showSecondStep(ticket, remember, onDone) {
+  const code = h('input', { class: 'auth-input code', type: 'text', inputmode: 'text', autocomplete: 'one-time-code', autocapitalize: 'none', spellcheck: 'false', 'aria-label': 'Code', placeholder: '123 456', maxlength: '24' });
+  const err = h('p', { class: 'auth-err hidden', role: 'alert' });
+  const btn = h('button', { class: 'btn auth-btn', type: 'submit' }, 'Verify');
+  const form = h('form', { class: 'auth-card', novalidate: true },
+    h('h1', {}, 'Two-step sign-in'), h('p', { class: 'auth-sub' }, 'Enter the 6-digit code from your authenticator app. Lost your phone? Use one of your recovery codes instead.'),
+    code, err, btn, h('a', { class: 'auth-fine', href: '#', onclick: (e) => { e.preventDefault(); location.reload(); } }, '← Start over'));
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault(); err.classList.add('hidden');
+    btn.disabled = true;
+    try {
+      const r = await postJson('/api/auth/login/2fa', { ticket, code: code.value.trim(), remember });
+      if (!r.ok) { err.textContent = r.json.error || 'That code isn’t right.'; err.classList.remove('hidden'); code.select(); if (r.status === 401 && /expired/i.test(r.json.error || '')) setTimeout(() => location.reload(), 1800); return; }
+      await finishSignIn(r.json, onDone);
+    } catch { err.textContent = 'Could not reach the server.'; err.classList.remove('hidden'); }
+    finally { btn.disabled = false; }
+  });
+  authShell(form);
+  code.focus();
 }
 
 function showSetup(state, onDone) {
@@ -103,7 +133,7 @@ function showSetup(state, onDone) {
     try {
       const r = await postJson('/api/auth/setup', { username: user.value.trim(), password: pw.input.value, setupCode: code ? code.value.trim() : undefined, displayName: display.value.trim() || undefined });
       if (!r.ok) { fail(r.json.error || 'Could not create the account.'); if (r.status === 409) setTimeout(() => location.reload(), 1500); return; }
-      AUTH.user = r.json.user; AUTH.name = r.json.name; AUTH.displayName = display.value.trim() || null; AUTH.locked = false;
+      AUTH.user = r.json.user; AUTH.name = r.json.name; AUTH.displayName = display.value.trim() || null; AUTH.role = 'admin'; AUTH.locked = false;
       paintUserChip();
       onDone();
     } catch { fail('Could not reach the server.'); }

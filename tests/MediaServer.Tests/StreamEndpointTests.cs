@@ -157,6 +157,8 @@ public sealed class WebClientTests : IDisposable
     [InlineData("/live.js", "javascript")]
     [InlineData("/settings.js", "javascript")]
     [InlineData("/auth.js", "javascript")]
+    [InlineData("/extras.js", "javascript")]
+    [InlineData("/sw.js", "javascript")]
     [InlineData("/live.css", "css")]
     [InlineData("/style.css", "text/css")]
     public async Task ServesClientAssets(string url, string type)

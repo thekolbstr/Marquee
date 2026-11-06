@@ -38,6 +38,8 @@ jobs:
       - run: node --check src/MediaServer.Api/wwwroot/live.js
       - run: node --check src/MediaServer.Api/wwwroot/settings.js
       - run: node --check src/MediaServer.Api/wwwroot/auth.js
+      - run: node --check src/MediaServer.Api/wwwroot/extras.js
+      - run: node --check src/MediaServer.Api/wwwroot/sw.js
       # --blame-hang: if a test ever hangs, name it and dump instead of silently running until the job times out.
       - run: dotnet test --configuration Release --blame-hang --blame-hang-timeout 5m
 

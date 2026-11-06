@@ -8,7 +8,10 @@ using MediaServer.Api.Endpoints;
 using MediaServer.Api.Media;
 using MediaServer.Api.Metadata;
 using MediaServer.Api.Probing;
+using MediaServer.Api.Recording;
 using MediaServer.Api.Processes;
+using System.Security.Cryptography.X509Certificates;
+using MediaServer.Api.Security;
 using MediaServer.Api.Settings;
 using MediaServer.Api.Streaming;
 
@@ -25,15 +28,25 @@ builder.Services.AddSingleton<LibraryScanner>();
 builder.Services.AddSingleton<LibraryQueries>();
 builder.Services.AddSingleton<ThumbnailService>();
 builder.Services.AddSingleton<SubtitleService>();
+builder.Services.AddSingleton<ChapterService>();
+builder.Services.AddSingleton<RecordingService>();
+builder.Services.AddSingleton<LiveListService>();
+builder.Services.AddHostedService<RecordingWorker>();
+builder.Services.AddSingleton<TrickplayService>();
 // One long-lived client for the IPTV source (playlist, guide, logos): pooled connections, transparent gzip.
 builder.Services.AddKeyedSingleton("livetv", (_, _) => new HttpClient(new SocketsHttpHandler
     { AutomaticDecompression = System.Net.DecompressionMethods.All, PooledConnectionLifetime = TimeSpan.FromMinutes(5) }) { Timeout = TimeSpan.FromMinutes(2) });
 builder.Services.AddSingleton(sp => new LiveTvService(sp.GetRequiredService<Database>(), sp.GetRequiredKeyedService<HttpClient>("livetv"),
-    sp.GetRequiredService<IConfiguration>(), sp.GetRequiredService<TimeProvider>(), sp.GetRequiredService<ILogger<LiveTvService>>()));
+    sp.GetRequiredService<IConfiguration>(), sp.GetRequiredService<TimeProvider>(), sp.GetRequiredService<ILogger<LiveTvService>>(), sp.GetRequiredService<SecretBox>()));
 builder.Services.AddSingleton(sp => new LiveLogoCache(sp.GetRequiredKeyedService<HttpClient>("livetv"), sp.GetRequiredService<IConfiguration>(), sp.GetRequiredService<TimeProvider>()));
 builder.Services.AddHostedService<LiveTvRefreshService>();
 builder.Services.AddSingleton<ProgressService>();
+builder.Services.AddSingleton<WatchlistService>();
+builder.Services.AddSingleton<SecretBox>();
+builder.Services.AddHttpContextAccessor();
+builder.Services.AddSingleton<IUserContext, HttpUserContext>();
 builder.Services.AddSingleton<AuthService>();
+builder.Services.AddSingleton<UserService>();
 builder.Services.AddSingleton<MaintenanceService>();
 builder.Services.AddSingleton<DbSettingsProvider>();
 builder.Services.AddSingleton<SettingsService>();
@@ -52,15 +65,56 @@ builder.Services.AddSingleton(sp =>
 });
 builder.Services.AddHostedService<HlsReaper>();
 
+// Optional built-in HTTPS (for running without a reverse proxy): the HTTP port(s) keep working, and an HTTPS port is added.
+X509Certificate2? httpsCert = null;
+var httpsPort = builder.Configuration.GetValue("Https:Port", 8443);
+if (builder.Configuration.GetValue("Https:Enabled", false))
+{
+    httpsCert = HttpsCertificate.Load(builder.Configuration);
+    var httpPorts = (builder.Configuration["urls"] ?? builder.Configuration["ASPNETCORE_URLS"] ?? "http://+:8080").Split(';', StringSplitOptions.RemoveEmptyEntries)
+        .Select(u => Uri.TryCreate(u.Replace("+", "localhost").Replace("*", "localhost").Replace("0.0.0.0", "localhost"), UriKind.Absolute, out var uri) ? uri : null)
+        .Where(u => u is { Scheme: "http" }).Select(u => u!.Port).Distinct().ToList();
+    builder.WebHost.ConfigureKestrel(o =>
+    {
+        foreach (var p in httpPorts) o.ListenAnyIP(p);
+        o.ListenAnyIP(httpsPort, lo => lo.UseHttps(httpsCert));
+    });
+}
+builder.Services.AddSingleton(new HttpsStatus(httpsCert is not null, httpsPort, httpsCert is not null && builder.Configuration["Https:CertificatePath"] is not { Length: > 0 }, httpsCert));
+
 var app = builder.Build();
 app.Services.GetRequiredService<Database>().Migrate();
+var sealedNow = SecretMigrator.Run(app.Services.GetRequiredService<Database>(), app.Services.GetRequiredService<SecretBox>());   // encrypt anything an older version left readable
+if (sealedNow != (0, 0)) app.Logger.LogInformation("Encrypted {Settings} saved settings and {Channels} channel entries that were stored as plain text", sealedNow.Settings, sealedNow.Channels);
 ((IConfigurationBuilder)app.Configuration).Add(app.Services.GetRequiredService<DbSettingsProvider>()); // UI-edited settings override the deployment's
 
 app.UseDefaultFiles();
+if (httpsCert is not null && app.Configuration.GetValue("Https:Hsts", false))
+    app.Use(async (ctx, next) => { if (ctx.Request.IsHttps) ctx.Response.Headers.StrictTransportSecurity = "max-age=31536000"; await next(); });
+if (httpsCert is not null && app.Configuration.GetValue("Https:RedirectHttp", false))
+    app.Use(async (ctx, next) =>
+    {
+        if (!ctx.Request.IsHttps && !ctx.Request.Path.StartsWithSegments("/health")) { ctx.Response.Redirect($"https://{ctx.Request.Host.Host}:{httpsPort}{ctx.Request.Path}{ctx.Request.QueryString}", permanent: false); return; }
+        await next();
+    });
 app.UseStaticFiles(); // the web client (wwwroot/): public, it contains no data
 app.UseMiddleware<AuthMiddleware>();
 
 app.MapGet("/health", () => Results.Ok(new { status = "ok" }));
+
+// The web app manifest (what "install this app" uses). Public, like the page itself; the name follows the server-name setting.
+app.MapGet("/manifest.webmanifest", (AuthService auth) => Results.Json(new
+{
+    name = auth.ServerName, short_name = auth.ServerName.Length > 12 ? auth.ServerName[..12] : auth.ServerName,
+    description = "Your own media server: movies, shows and live TV.",
+    start_url = "/", scope = "/", display = "standalone", orientation = "any", background_color = "#0a0c10", theme_color = "#0a0c10",
+    icons = new object[]
+    {
+        new { src = "/icons/icon-192.png", sizes = "192x192", type = "image/png", purpose = "any" },
+        new { src = "/icons/icon-512.png", sizes = "512x512", type = "image/png", purpose = "any" },
+        new { src = "/icons/icon-maskable-512.png", sizes = "512x512", type = "image/png", purpose = "maskable" },
+    },
+}, contentType: "application/manifest+json"));
 
 // GET and HEAD (MapGet does not cover HEAD automatically for handlers that write the body themselves).
 app.MapMethods("/stream/{id:long}", ["GET", "HEAD"], async (long id, HttpContext ctx, IMediaResolver media) =>
@@ -79,13 +133,16 @@ app.MapGet("/api/probe/{id:long}", async (long id, IMediaResolver media, IMediaP
 });
 
 app.MapAuthEndpoints();
+app.MapUserEndpoints();
 app.MapMetadataEndpoints();
 app.MapLibraryEndpoints();
 app.MapMediaEndpoints();
 app.MapClientEventEndpoints();
 app.MapLiveTvEndpoints();
 app.MapSystemEndpoints();
+app.MapHttpsEndpoints();
 app.MapSettingsEndpoints();
+app.MapRecordingEndpoints();
 app.MapMaintenanceEndpoints();
 app.MapFolderEndpoints();
 app.MapHlsEndpoints();

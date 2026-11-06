@@ -62,7 +62,7 @@ public sealed class MemoryLogProvider(MemoryLogStore store) : ILoggerProvider
 public sealed record AboutInfo(string Version, string Runtime, string Os, int Cpus, long MemoryBytes, string? Ffmpeg, long DatabaseBytes);
 
 /// <summary>Housekeeping the person running the server might want: clearing caches, refreshing metadata, compacting and backing up the database.</summary>
-public sealed class MaintenanceService(Database db, IConfiguration config, HlsSessionManager hls, IProcessRunner runner)
+public sealed class MaintenanceService(Database db, IConfiguration config, HlsSessionManager hls, IProcessRunner runner, MediaServer.Api.Auth.IUserContext? users = null)
 {
     private string ImagesDir => Path.GetFullPath(config["Images:CacheDir"] ?? "data/images");
     private string DbPath => Path.GetFullPath(config["Database:Path"] ?? "data/mediaserver.db");
@@ -126,7 +126,7 @@ public sealed class MaintenanceService(Database db, IConfiguration config, HlsSe
     public int ClearWatchHistory()
     {
         using var c = db.Open();
-        return Database.Execute(c, null, "DELETE FROM media_progress");
+        return Database.Execute(c, null, "DELETE FROM media_progress WHERE user_id=@u", ("@u", users?.UserId ?? 1));   // your own history, not other people's
     }
 
     /// <summary>Forgets every TMDB match and cached answer so the next scan fetches everything again (manual matches are re-applied).</summary>

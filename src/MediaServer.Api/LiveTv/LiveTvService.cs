@@ -2,6 +2,7 @@ using System.Globalization;
 using System.IO.Compression;
 using System.Text.Json;
 using MediaServer.Api.Data;
+using MediaServer.Api.Security;
 using MediaServer.Api.Probing;
 using Microsoft.Data.Sqlite;
 
@@ -24,7 +25,7 @@ public sealed record LiveStream(long ChannelId, string Url, MediaInfo? CachedInf
 /// Live TV from an M3U playlist + XMLTV guide (e.g. Dispatcharr). Clients refer to channels by database ID only; stream URLs stay
 /// on the server.
 /// </summary>
-public sealed class LiveTvService(Database db, HttpClient http, IConfiguration config, TimeProvider time, ILogger<LiveTvService> log)
+public sealed class LiveTvService(Database db, HttpClient http, IConfiguration config, TimeProvider time, ILogger<LiveTvService> log, SecretBox? box = null)
 {
     private const long MaxPlaylistBytes = 20L * 1024 * 1024;
     private const long MaxGuideBytes = 300L * 1024 * 1024;
@@ -117,13 +118,13 @@ public sealed class LiveTvService(Database db, HttpClient http, IConfiguration c
             var key = ch.TvgId ?? "name:" + new string(ch.Name.ToLowerInvariant().Where(char.IsLetterOrDigit).ToArray());
             if (!seen.Add(key)) continue; // duplicate entry in the playlist: first one wins
             Database.Execute(c, tx, """
-                INSERT INTO live_channels(source_key,tvg_id,name,number,group_name,logo_url,stream_url,active,updated_at)
-                VALUES(@k,@t,@n,@no,@g,@l,@u,1,@now)
+                INSERT INTO live_channels(source_key,tvg_id,name,number,group_name,logo_url,stream_url,stream_sig,active,updated_at)
+                VALUES(@k,@t,@n,@no,@g,@l,@u,@sig,1,@now)
                 ON CONFLICT(source_key) DO UPDATE SET tvg_id=excluded.tvg_id, name=excluded.name, number=excluded.number, group_name=excluded.group_name,
                     logo_url=excluded.logo_url, active=1, updated_at=excluded.updated_at,
-                    probe_json=CASE WHEN stream_url<>excluded.stream_url THEN NULL ELSE probe_json END,
-                    stream_url=excluded.stream_url
-                """, ("@k", key), ("@t", ch.TvgId), ("@n", ch.Name), ("@no", ch.Number), ("@g", ch.Group), ("@l", ch.Logo), ("@u", ch.Url),
+                    probe_json=CASE WHEN stream_sig IS NOT excluded.stream_sig THEN NULL ELSE probe_json END,
+                    stream_url=excluded.stream_url, stream_sig=excluded.stream_sig
+                """, ("@k", key), ("@t", ch.TvgId), ("@n", ch.Name), ("@no", ch.Number), ("@g", ch.Group), ("@l", Seal(ch.Logo, "live.logo")), ("@u", Seal(ch.Url, "live.stream")), ("@sig", box?.Fingerprint(ch.Url) ?? ch.Url),
                 ("@now", now.ToString("O", CultureInfo.InvariantCulture)));
         }
         tx.Commit();
@@ -166,7 +167,15 @@ public sealed class LiveTvService(Database db, HttpClient http, IConfiguration c
 
     private sealed record Row(long Id, string? TvgId, int? Number, string Name, string? Group, bool HasLogo, bool Favorite);
 
-    private (List<Row> Rows, int Total) QueryChannels(string? group, string? search, bool favoritesOnly, int limit, int offset)
+    /// <summary>Guide entries for one channel in [from, to).</summary>
+    public IReadOnlyList<LiveProgram> ChannelPrograms(long channelId, long from, long to)
+    {
+        using var c = db.Open();
+        var tvg = Database.Query(c, "SELECT tvg_id FROM live_channels WHERE id=@i", r => r.IsDBNull(0) ? null : r.GetString(0), ("@i", channelId)).FirstOrDefault();
+        return tvg is null ? [] : Programs([tvg], from, to, out _);
+    }
+
+    private (List<Row> Rows, int Total) QueryChannels(string? group, string? search, bool favoritesOnly, int limit, int offset, long? listId = null)
     {
         var where = new List<string> { "c.active=1" };
         var ps = new List<(string, object?)>();
@@ -174,6 +183,7 @@ public sealed class LiveTvService(Database db, HttpClient http, IConfiguration c
         // instr() rather than LIKE: user text can't act as a wildcard.
         if (!string.IsNullOrWhiteSpace(search)) { where.Add("instr(lower(c.name), lower(@q)) > 0"); ps.Add(("@q", search.Trim())); }
         if (favoritesOnly) where.Add("f.channel_id IS NOT NULL");
+        if (listId is { } lid) { where.Add("c.id IN (SELECT channel_id FROM live_list_channels WHERE list_id=@list)"); ps.Add(("@list", lid)); }
         var from = "FROM live_channels c LEFT JOIN live_favorites f ON f.channel_id=c.id WHERE " + string.Join(" AND ", where);
 
         using var conn = db.Open();
@@ -203,9 +213,9 @@ public sealed class LiveTvService(Database db, HttpClient http, IConfiguration c
     }
 
     /// <summary>The channel list with what is on now and next.</summary>
-    public LiveChannelList Channels(string? group, string? search, bool favoritesOnly, int limit, int offset)
+    public LiveChannelList Channels(string? group, string? search, bool favoritesOnly, int limit, int offset, long? listId = null)
     {
-        var (rows, total) = QueryChannels(group, search, favoritesOnly, limit, offset);
+        var (rows, total) = QueryChannels(group, search, favoritesOnly, limit, offset, listId);
         var now = time.GetUtcNow().ToUnixTimeSeconds();
         Programs(rows.Where(r => r.TvgId is not null).Select(r => r.TvgId!), now, now + 6 * 3600, out var by);
         var items = rows.Select(r =>
@@ -219,11 +229,11 @@ public sealed class LiveTvService(Database db, HttpClient http, IConfiguration c
     }
 
     /// <summary>Channels with their programmes for [from, from+hours): the timeline guide.</summary>
-    public GuideResult Guide(string? group, string? search, bool favoritesOnly, long from, int hours, int limit, int offset)
+    public GuideResult Guide(string? group, string? search, bool favoritesOnly, long from, int hours, int limit, int offset, long? listId = null)
     {
         hours = Math.Clamp(hours, 1, 12);
         var to = from + hours * 3600L;
-        var (rows, total) = QueryChannels(group, search, favoritesOnly, limit, offset);
+        var (rows, total) = QueryChannels(group, search, favoritesOnly, limit, offset, listId);
         Programs(rows.Where(r => r.TvgId is not null).Select(r => r.TvgId!), from, to, out var by);
         var channels = rows.Select(r => new GuideChannel(r.Id, r.Number, r.Name, r.Group, Logo(r), r.Favorite,
             r.TvgId is not null && by.TryGetValue(r.TvgId, out var l) ? l : [])).ToList();
@@ -261,6 +271,9 @@ public sealed class LiveTvService(Database db, HttpClient http, IConfiguration c
 
     // ------------------------------------------------------------------ playback support
 
+    private string? Seal(string? v, string context) => v is null || box is null ? v : box.Protect(v, context);
+    private string? Open(string? v, string context) => v is null || box is null ? v : box.TryUnprotect(v, context);
+
     public LiveStream? GetStream(long id)
     {
         using var c = db.Open();
@@ -270,7 +283,8 @@ public sealed class LiveTvService(Database db, HttpClient http, IConfiguration c
         MediaInfo? cached = null;
         if (rows[0].Json is { } json && DateTimeOffset.TryParse(rows[0].At, CultureInfo.InvariantCulture, DateTimeStyles.None, out var at) && time.GetUtcNow() - at < ProbeFreshness)
             try { cached = JsonSerializer.Deserialize<MediaInfo>(json); } catch (JsonException) { }
-        return new LiveStream(id, rows[0].Url, cached);
+        if (Open(rows[0].Url, "live.stream") is not { } url) return null;   // sealed with a key we no longer have: the next refresh rewrites it
+        return new LiveStream(id, url, cached);
     }
 
     public void SaveProbe(long id, MediaInfo info)
@@ -283,7 +297,7 @@ public sealed class LiveTvService(Database db, HttpClient http, IConfiguration c
     public string? LogoSource(long id)
     {
         using var c = db.Open();
-        return Database.Query(c, "SELECT logo_url FROM live_channels WHERE id=@i AND active=1 AND logo_url IS NOT NULL", r => r.GetString(0), ("@i", id)).FirstOrDefault();
+        return Open(Database.Query(c, "SELECT logo_url FROM live_channels WHERE id=@i AND active=1 AND logo_url IS NOT NULL", r => r.GetString(0), ("@i", id)).FirstOrDefault(), "live.logo");
     }
 }
 

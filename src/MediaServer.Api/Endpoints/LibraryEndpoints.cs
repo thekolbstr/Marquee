@@ -13,6 +13,23 @@ public static class LibraryEndpoints
         app.MapGet("/api/items", (LibraryQueries q, string? search, string? type, string? sort, int? limit, int? offset, bool? matched, string? genre) =>
             Results.Ok(q.List(search, type, sort ?? "title", limit ?? 60, offset ?? 0, matched, genre)));
 
+        // My List
+        app.MapGet("/api/watchlist", (LibraryQueries q, WatchlistService w) => Results.Ok(new { items = q.ItemsByKeys(w.Keys()) }));
+        app.MapGet("/api/watchlist/keys", (WatchlistService w) => Results.Ok(new { keys = w.Keys() }));
+        app.MapGet("/api/watchlist/status/{type}/{key}", (string type, string key, WatchlistService w, LibraryQueries q) =>
+            Results.Ok(new { inList = q.CanonicalItemKey(type, key) is { } k && w.Keys().Any(x => x.Type == type && x.Key == k) }));
+        app.MapPut("/api/watchlist/{type}/{key}", (string type, string key, WatchlistService w, LibraryQueries q) =>
+            q.CanonicalItemKey(type, key) is { } k && w.Add(type, k) ? Results.NoContent() : Results.BadRequest(new { error = "Unknown item" }));
+        app.MapDelete("/api/watchlist/{type}/{key}", (string type, string key, WatchlistService w, LibraryQueries q) => { w.Remove(type, q.CanonicalItemKey(type, key) ?? key); return Results.NoContent(); });
+
+        // Mark a whole show (or one season of it) watched or unwatched.
+        app.MapPost("/api/items/series/{key}/watched", (string key, int? season, bool? watched, LibraryQueries q, ProgressService p) =>
+        {
+            var files = q.EpisodeFiles(key, season);
+            if (files.Count == 0) return Results.NotFound();
+            return Results.Ok(new { changed = p.SetWatched(files, watched ?? true) });
+        });
+
         // "Surprise me": a random movie or episode (unwatched first), optionally within a genre.
         app.MapGet("/api/random", (LibraryQueries q, string? kind, string? genre) =>
             q.Random(kind == "episode" ? "episode" : "movie", genre) is { } pick ? Results.Ok(pick) : Results.NotFound(new { error = "Nothing to pick from" }));

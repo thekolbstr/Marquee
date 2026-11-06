@@ -101,11 +101,13 @@ public sealed partial class HlsSessionManager : IDisposable
     /// <exception cref="InvalidOperationException">No video stream.</exception>
     /// <exception cref="HlsStartException">ffmpeg failed to start or produce output.</exception>
     public async Task<HlsSession> StartAsync(long mediaId, CancellationToken ct, ClientCaps? caps = null, bool forceTranscode = false,
-        double startSeconds = 0, string? quality = null)
+        double startSeconds = 0, string? quality = null, int? audioIndex = null, int? burnSubtitle = null)
     {
         var path = _resolver.ResolvePath(mediaId) ?? throw new KeyNotFoundException($"No media with id {mediaId}");
         var info = await _probe.ProbeAsync(path, ct);
-        var plan = HlsPlanner.Decide(info, Opts, caps, Path.GetExtension(path), forceTranscode, quality) ?? throw new InvalidOperationException("The file has no video stream");
+        if (audioIndex is { } ai && info.Audio.All(x => x.Index != ai)) throw new InvalidOperationException("That audio track doesn't exist in this file.");
+        if (burnSubtitle is { } bs && info.Subtitles.All(x => x.Index != bs)) throw new InvalidOperationException("That subtitle track doesn't exist in this file.");
+        var plan = HlsPlanner.Decide(info, Opts, caps, Path.GetExtension(path), forceTranscode, quality, audioIndex, burnSubtitle) ?? throw new InvalidOperationException("The file has no video stream");
         if (plan.Video == VideoMode.Encode && !Opts.AllowTranscoding)
             throw new InvalidOperationException("This video needs transcoding for this device, and transcoding is turned off on this server.");
 

@@ -3,7 +3,7 @@ using System.Text.RegularExpressions;
 
 namespace MediaServer.Api.Library;
 
-public enum MediaKind { Unknown, Movie, Episode, Extra }
+public enum MediaKind { Unknown, Movie, Episode, Extra, Recording }
 
 public sealed record ParsedName(
     MediaKind Kind, string Title, int? Year, int? Season, int? Episode, int? EpisodeEnd,

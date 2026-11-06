@@ -41,6 +41,23 @@ public static class MediaEndpoints
             return Results.File(file, "text/vtt; charset=utf-8");
         });
 
+        // Chapter marks and the skip-intro / skip-credits spans found in them.
+        app.MapGet("/api/media/{id:long}/chapters", async (long id, ChapterService chapters, CancellationToken ct) =>
+            await chapters.GetAsync(id, ct) is { } info ? Results.Ok(info) : Results.NotFound());
+
+        // Seek-bar previews: 200 when the sprite sheets exist, 202 while they're being made, 404 when there won't be any.
+        app.MapGet("/api/media/{id:long}/trickplay", (long id, TrickplayService trick) =>
+        {
+            var (state, info) = trick.Get(id);
+            return state switch { TrickplayService.State.Ready => Results.Ok(info), TrickplayService.State.Generating => Results.Accepted(value: new { status = "generating" }), _ => Results.NotFound() };
+        });
+        app.MapGet("/api/media/{id:long}/trickplay/{n:int}.jpg", (long id, int n, TrickplayService trick, HttpContext ctx) =>
+        {
+            if (trick.SheetPath(id, n) is not { } file) return Results.NotFound();
+            ctx.Response.Headers.CacheControl = "public, max-age=86400";
+            return Results.File(file, "image/jpeg");
+        });
+
         app.MapGet("/api/continue", (LibraryQueries q, int? limit) => Results.Ok(q.Continue(limit ?? 12)));
 
         // Library scans run independently of the request: a proxy timeout or closed tab doesn't abort them.

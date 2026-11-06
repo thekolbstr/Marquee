@@ -4,6 +4,11 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="theme-color" content="#0a0c10">
+  <link rel="manifest" href="/manifest.webmanifest">
+  <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <title>MediaServer</title>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 32 32%27%3E%3Cdefs%3E%3ClinearGradient id=%27g%27 x1=%270%27 y1=%270%27 x2=%271%27 y2=%271%27%3E%3Cstop offset=%270%27 stop-color=%27%237c8cff%27/%3E%3Cstop offset=%271%27 stop-color=%27%23b07cff%27/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width=%2732%27 height=%2732%27 rx=%278%27 fill=%27url(%23g)%27/%3E%3Cpath d=%27M12 8l12 8-12 8z%27 fill=%27white%27/%3E%3C/svg%3E">
   <link rel="stylesheet" href="/style.css">
@@ -16,7 +21,9 @@
       <a href="#/" data-route="home">Home</a>
       <a href="#/movies" data-route="movies">Movies</a>
       <a href="#/shows" data-route="shows">TV Shows</a>
+      <a href="#/mylist" data-route="mylist">My List</a>
       <a href="#/live" data-route="live" class="hidden">Live TV</a>
+      <a href="#/recordings" data-route="recordings" class="hidden">Recordings</a>
     </nav>
     <form id="searchform" role="search" autocomplete="off">
       <input id="search" type="search" placeholder="Search" aria-label="Search movies and shows" enterkeyhint="search">
@@ -27,8 +34,10 @@
   <div id="toasts" aria-live="polite"></div>
   <script src="/vendor/hls.min.js"></script>
   <script src="/live.js"></script>
+  <script src="/vendor/qrcode.js"></script>
   <script src="/auth.js"></script>
   <script src="/settings.js"></script>
+  <script src="/extras.js"></script>
   <script src="/app.js"></script>
 </body>
 </html>

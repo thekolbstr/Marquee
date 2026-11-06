@@ -18,7 +18,7 @@ public sealed class Database
     {
         var c = new SqliteConnection(_connectionString);
         c.Open();
-        Exec(c, "PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000; PRAGMA synchronous=NORMAL;");
+        Exec(c, "PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000; PRAGMA synchronous=NORMAL; PRAGMA secure_delete=ON;");   // deleted rows (old sessions, removed secrets) are overwritten, not just unlinked
         return c;
     }
 
@@ -237,5 +237,82 @@ public static class Migrations
         """,
         // v8: the name shown in the interface (the username stays the sign-in name).
         "ALTER TABLE users ADD COLUMN display_name TEXT;",
+        // v9: several people can share a server. Watch history becomes per person (existing history goes to the first account), and each
+        // person has their own list of things to watch later.
+        """
+        ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'admin';
+        CREATE TABLE media_progress_v2 (
+            user_id          INTEGER NOT NULL DEFAULT 1,
+            media_id         INTEGER NOT NULL REFERENCES media_files(id) ON DELETE CASCADE,
+            position_seconds REAL    NOT NULL,
+            duration_seconds REAL,
+            watched          INTEGER NOT NULL DEFAULT 0,
+            updated_at       TEXT    NOT NULL,
+            PRIMARY KEY (user_id, media_id)
+        );
+        INSERT INTO media_progress_v2(user_id, media_id, position_seconds, duration_seconds, watched, updated_at)
+            SELECT COALESCE((SELECT MIN(id) FROM users), 1), media_id, position_seconds, duration_seconds, watched, updated_at FROM media_progress;
+        DROP TABLE media_progress;
+        ALTER TABLE media_progress_v2 RENAME TO media_progress;
+        CREATE INDEX ix_progress_updated ON media_progress(updated_at);
+        CREATE INDEX ix_progress_media ON media_progress(media_id);
+        CREATE TABLE watchlist (
+            user_id  INTEGER NOT NULL,
+            kind     TEXT    NOT NULL,          -- 'movie' or 'series'
+            item_key TEXT    NOT NULL,          -- the media id for a movie, the series key for a show
+            added_at TEXT    NOT NULL,
+            PRIMARY KEY (user_id, kind, item_key)
+        );
+        """,
+        // v10: two-factor sign-in (TOTP) with one-time recovery codes. The secret is stored encrypted.
+        """
+        ALTER TABLE users ADD COLUMN totp_enabled INTEGER NOT NULL DEFAULT 0;
+        ALTER TABLE users ADD COLUMN totp_secret TEXT;
+        ALTER TABLE users ADD COLUMN totp_last_step INTEGER;
+        ALTER TABLE users ADD COLUMN recovery_codes TEXT;
+        """,
+        // v11: stream URLs are stored encrypted, so "did the URL change" is answered with a keyed fingerprint.
+        "ALTER TABLE live_channels ADD COLUMN stream_sig TEXT;",
+        // v12: chapter marks (read from the file the first time it's played) drive the skip-intro and skip-credits buttons.
+        """
+        CREATE TABLE media_chapters (
+            media_id    INTEGER PRIMARY KEY REFERENCES media_files(id) ON DELETE CASCADE,
+            mtime_ticks INTEGER NOT NULL,
+            json        TEXT    NOT NULL,
+            fetched_at  TEXT    NOT NULL
+        );
+        """,
+        // v13: recording live TV, and your own named groups of channels.
+        """
+        CREATE TABLE recordings (
+            id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id      INTEGER NOT NULL DEFAULT 1,
+            channel_id   INTEGER NOT NULL,
+            channel_name TEXT    NOT NULL,
+            title        TEXT    NOT NULL,
+            description  TEXT,
+            start_ts     INTEGER NOT NULL,
+            stop_ts      INTEGER NOT NULL,
+            status       TEXT    NOT NULL,          -- scheduled | recording | done | failed | cancelled
+            error        TEXT,
+            file_name    TEXT,                      -- inside the recordings folder
+            created_at   TEXT    NOT NULL,
+            started_at   TEXT,
+            finished_at  TEXT
+        );
+        CREATE INDEX ix_recordings_status ON recordings(status, start_ts);
+        CREATE TABLE live_lists (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id    INTEGER NOT NULL,
+            name       TEXT    NOT NULL COLLATE NOCASE,
+            created_at TEXT    NOT NULL,
+            UNIQUE (user_id, name)
+        );
+        CREATE TABLE live_list_channels (
+            list_id    INTEGER NOT NULL REFERENCES live_lists(id) ON DELETE CASCADE,
+            channel_id INTEGER NOT NULL,
+            PRIMARY KEY (list_id, channel_id)
+        );
+        """,
     ];
 }

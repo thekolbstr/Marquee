@@ -18,6 +18,7 @@ async function loadLiveStatus() {
   try { liveInfo = await api('/api/live/status'); } catch { liveInfo = { configured: false, channels: 0 }; }
   const link = document.querySelector('#nav a[data-route=live]');
   if (link) link.classList.toggle('hidden', !liveInfo.configured);
+  document.querySelector('#nav a[data-route=recordings]')?.classList.toggle('hidden', !liveInfo.configured);
   return liveInfo;
 }
 
@@ -74,27 +75,39 @@ async function showLive() {
   }
 
   const groups = await api('/api/live/groups').catch(() => []);
+  let myLists = (await api('/api/live/lists').catch(() => ({ lists: [] }))).lists;
   let group = store('live-group') || '';
-  if (group && group !== '★' && !groups.some((g) => g.name === group)) group = '';
+  if (group && group !== '★' && !group.startsWith('list:') && !groups.some((g) => g.name === group)) group = '';
+  if (group.startsWith('list:') && !myLists.some((l) => `list:${l.id}` === group)) group = '';
   let query = '';
   let mode = store('live-view') || (matchMedia('(max-width: 720px)').matches ? 'list' : 'guide');
 
   const body = h('div', { class: 'livebody' });
   const groupSel = h('select', { class: 'sort', 'aria-label': 'Channel group', onchange: (e) => { group = e.target.value; store('live-group', group); draw(); } },
-    h('option', { value: '' }, `All channels (${st.channels})`), h('option', { value: '★' }, '★ Favorites'),
-    groups.map((g) => h('option', { value: g.name }, `${g.name} (${g.count})`)));
-  groupSel.value = group;
+    h('option', { value: '' }, `All channels (${st.channels})`), h('option', { value: '★' }, '★ Favorites'));
+  const fillGroups = () => {
+    groupSel.replaceChildren(h('option', { value: '' }, `All channels (${st.channels})`), h('option', { value: '★' }, '★ Favorites'),
+      myLists.length ? h('optgroup', { label: 'My lists' }, myLists.map((l) => h('option', { value: `list:${l.id}` }, `${l.name} (${l.channels})`))) : null,
+      h('optgroup', { label: 'Groups' }, groups.map((g) => h('option', { value: g.name }, `${g.name} (${g.count})`))));
+    groupSel.value = group;
+  };
+  fillGroups();
+  const listsBtn = h('button', { class: 'btn glass small', type: 'button', title: 'Make your own channel lists', onclick: () => openListsDialog(myLists, async () => {
+    myLists = (await api('/api/live/lists').catch(() => ({ lists: [] }))).lists;
+    if (group.startsWith('list:') && !myLists.some((l) => `list:${l.id}` === group)) { group = ''; store('live-group', ''); }
+    fillGroups(); draw();
+  }) }, icon('list'), 'Lists');
   const search = h('input', { type: 'search', class: 'dlg-input livesearch', placeholder: 'Find a channel', 'aria-label': 'Find a channel' });
   let st1; search.addEventListener('input', () => { clearTimeout(st1); st1 = setTimeout(() => { query = search.value.trim(); draw(); }, 250); });
   const seg = h('div', { class: 'seg', role: 'group', 'aria-label': 'View' });
   const drawSeg = () => seg.replaceChildren(...[['guide', 'Guide'], ['list', 'Now']].map(([v, l]) => h('button', { type: 'button', class: mode === v ? 'on' : '', 'aria-pressed': String(mode === v), onclick: () => { mode = v; store('live-view', v); drawSeg(); draw(); } }, l)));
   drawSeg();
 
-  setView(h('div', { class: 'page livepage' }, h('div', { class: 'page-head' }, h('h1', {}, 'Live TV'), h('span', { class: 'count' }, `${st.channels} channels`), seg, groupSel, search), body));
+  setView(h('div', { class: 'page livepage' }, h('div', { class: 'page-head' }, h('h1', {}, 'Live TV'), h('span', { class: 'count' }, `${st.channels} channels`), seg, groupSel, listsBtn, search), body));
 
   let cleanup = () => {};
   onLeave(() => cleanup());
-  function filters() { return { group: group && group !== '★' ? group : '', favorites: group === '★', search: query }; }
+  function filters() { return { group: group && group !== '★' && !group.startsWith('list:') ? group : '', favorites: group === '★', list: group.startsWith('list:') ? group.slice(5) : '', search: query }; }
   function draw() { cleanup(); cleanup = (mode === 'guide' ? renderGuide : renderList)(body, filters()) || (() => {}); }
   draw();
 }
@@ -102,6 +115,7 @@ async function showLive() {
 function filterQuery(f) {
   const q = new URLSearchParams();
   if (f.group) q.set('group', f.group);
+  if (f.list) q.set('list', f.list);
   if (f.favorites) q.set('favorites', 'true');
   if (f.search) q.set('search', f.search);
   return q;
@@ -131,13 +145,24 @@ function renderGuide(container, f) {
   scroller.scrollLeft = Math.max(0, px(nowTs()) - 140);
   const timer = setInterval(placeNow, 30000);
 
+  const planned = new Set();   // "channel:start" of what is already scheduled or recording
+  fetch('/api/recordings').then((r) => (r.ok ? r.json() : { recordings: [] })).then((d) => d.recordings.filter((r) => r.status === 'scheduled' || r.status === 'recording').forEach((r) => planned.add(`${r.channelId}:${r.startTs}`))).catch(() => {});
   function block(ch, p) {
     const start = Math.max(p.start, from), stop = Math.min(p.stop, from + GUIDE_HOURS * 3600);
     const now = nowTs();
     const cls = 'gprog' + (p.start <= now && p.stop > now ? ' now' : p.stop <= now ? ' past' : '') + (p.start < from ? ' cont' : '');
-    return h('a', { class: cls, href: `#/live/${ch.id}`, style: `left:${px(start)}px;width:${Math.max(3, px(stop) - px(start) - 3)}px`,
+    const el = h('a', { class: cls, href: `#/live/${ch.id}`, style: `left:${px(start)}px;width:${Math.max(3, px(stop) - px(start) - 3)}px`,
       title: `${p.title}${p.subtitle ? ' · ' + p.subtitle : ''}\n${fmtClock(p.start)} – ${fmtClock(p.stop)}${p.category ? '  ·  ' + p.category : ''}${p.description ? '\n\n' + p.description : ''}` },
       h('span', { class: 'gt' }, p.title), h('span', { class: 'gs' }, `${fmtClock(p.start)} – ${fmtClock(p.stop)}`));
+    if (p.stop > now) {
+      const mark = () => el.classList.toggle('planned', planned.has(`${ch.id}:${p.start}`));
+      el.append(h('button', { class: 'gcrec', type: 'button', title: 'Record this programme', 'aria-label': `Record ${p.title}`, onclick: async (e) => {
+        e.preventDefault(); e.stopPropagation();
+        if (await startRecording(ch.id, { programmeStart: p.start })) { planned.add(`${ch.id}:${p.start}`); mark(); }
+      } }, '●'));
+      mark();
+    }
+    return el;
   }
   function row(ch) {
     const line = h('div', { class: 'gline', style: `width:${width}px` },
@@ -209,8 +234,8 @@ function renderList(container, f) {
 async function showLivePlayer(id) {
   const token = playerToken;
   const group = store('live-group') || '';
-  const orderQuery = () => { const q = new URLSearchParams({ limit: '500' }); if (group === '★') q.set('favorites', 'true'); else if (group) q.set('group', group); return q; };
-  let list = (await api(`/api/live/channels?${orderQuery()}`)).items;
+  const orderQuery = () => { const q = new URLSearchParams({ limit: '500' }); if (group === '★') q.set('favorites', 'true'); else if (group.startsWith('list:')) q.set('list', group.slice(5)); else if (group) q.set('group', group); return q; };
+  let list = (await api(`/api/live/channels?${orderQuery()}`).catch(() => ({ items: [] }))).items;
   let idx = list.findIndex((c) => c.id === id);
   if (idx < 0) { list = (await api('/api/live/channels?limit=500')).items; idx = list.findIndex((c) => c.id === id); }
   if (idx < 0) throw new Error('Channel not found');
@@ -232,8 +257,12 @@ async function showLivePlayer(id) {
   const goLive = h('button', { class: 'btn golive hidden', type: 'button' }, 'Go to live');
   const errorBox = h('div', { class: 'errorbox hidden' });
   const drawer = h('aside', { class: 'drawer hidden', 'aria-label': 'Channels' });
+  const recBtn = h('button', { class: 'round recbtn', type: 'button', title: 'Record this programme', 'aria-label': 'Record', onclick: async () => {
+    const r = await startRecording(cur().id, { mode: 'now' });
+    if (r) recBtn.classList.add('on');
+  } }, h('span', { class: 'recdot' }));
   const stage = h('div', { class: 'player' }, video, spinner,
-    h('div', { class: 'player-top' }, back, logoSlot, titleEl, liveBadge, star, chip, chBtn), reasonEl, banner, numOverlay, goLive, errorBox, drawer);
+    h('div', { class: 'player-top' }, back, logoSlot, titleEl, liveBadge, star, recBtn, chip, chBtn), reasonEl, banner, numOverlay, goLive, errorBox, drawer);
   setView(stage);
 
   const leave = () => { if (history.length > 1) history.back(); else location.hash = '#/live'; };
@@ -423,4 +452,59 @@ async function showLivePlayer(id) {
   renderInfo(); renderDrawer(); drawer.classList.add('hidden');
   await tune(cur());
   if (token !== playerToken) ctl.stop();
+}
+
+// ---------------------------------------------------------------- your channel lists ("Sports", "Kids"…)
+function openListsDialog(initial, onChange) {
+  let lists = initial.map((l) => ({ ...l }));
+  let selected = lists[0] ? lists[0].id : null;
+  const nameIn = h('input', { class: 'dlg-input', type: 'text', maxlength: '40', placeholder: 'New list name', 'aria-label': 'New list name' });
+  const listBox = h('div', { class: 'dlg-list ll-lists' });
+  const chanBox = h('div', { class: 'dlg-list ll-chans' });
+  const search = h('input', { class: 'dlg-input', type: 'search', placeholder: 'Find a channel to add', 'aria-label': 'Find a channel' });
+  const close = () => { document.removeEventListener('keydown', onKey); dlg.remove(); onChange(); };
+  const onKey = (e) => { if (e.key === 'Escape') close(); };
+  const call = async (method, url, body) => {
+    const res = await fetch(url, { method, headers: body ? { 'content-type': 'application/json' } : undefined, body: body ? JSON.stringify(body) : undefined });
+    const j = res.status === 204 ? {} : await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(j.error || 'That didn’t work');
+    return j;
+  };
+  const reload = async () => { lists = (await api('/api/live/lists')).lists; if (!lists.some((l) => l.id === selected)) selected = lists[0] ? lists[0].id : null; drawLists(); drawChannels(); };
+
+  function drawLists() {
+    listBox.replaceChildren(...(lists.length ? lists.map((l) => h('div', { class: 'll-item' + (l.id === selected ? ' on' : '') },
+      h('button', { type: 'button', class: 'll-name', onclick: () => { selected = l.id; drawLists(); drawChannels(); } }, l.name, h('small', {}, ` ${l.channels}`)),
+      h('button', { type: 'button', class: 'll-x', title: 'Rename', onclick: async () => { const n = prompt('New name', l.name); if (n) { try { await call('PATCH', `/api/live/lists/${l.id}`, { name: n }); reload(); } catch (e) { toast(e.message, true); } } } }, '✎'),
+      h('button', { type: 'button', class: 'll-x', title: 'Delete', onclick: async () => { if (confirm(`Delete the list “${l.name}”? The channels themselves stay.`)) { try { await call('DELETE', `/api/live/lists/${l.id}`); reload(); } catch (e) { toast(e.message, true); } } } }, '✕')))
+      : [h('div', { class: 'dur' }, 'No lists yet. Name one above to start.')]));
+  }
+  let timer;
+  async function drawChannels() {
+    const l = lists.find((x) => x.id === selected);
+    if (!l) { chanBox.replaceChildren(h('div', { class: 'dur' }, 'Pick or create a list.')); return; }
+    const q = search.value.trim();
+    const d = await api(`/api/live/channels?limit=200${q ? `&search=${encodeURIComponent(q)}` : ''}`).catch(() => ({ items: [] }));
+    const inList = new Set(l.channelIds);
+    // members first, then the rest
+    const items = [...d.items].sort((a, b) => Number(inList.has(b.id)) - Number(inList.has(a.id)));
+    chanBox.replaceChildren(...items.map((c) => h('label', { class: 'll-chan' },
+      h('input', { type: 'checkbox', checked: inList.has(c.id) ? true : null, onchange: async (e) => {
+        try { await call(e.target.checked ? 'PUT' : 'DELETE', `/api/live/lists/${l.id}/channels/${c.id}`); if (e.target.checked) l.channelIds.push(c.id); else l.channelIds = l.channelIds.filter((x) => x !== c.id); l.channels = l.channelIds.length; drawLists(); }
+        catch (err) { toast(err.message, true); e.target.checked = !e.target.checked; }
+      } }), h('span', {}, `${c.number != null ? c.number + ' · ' : ''}${c.name}`))));
+  }
+  search.addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(drawChannels, 250); });
+  const add = async () => { const n = nameIn.value.trim(); if (!n) return; try { const made = await call('POST', '/api/live/lists', { name: n }); nameIn.value = ''; selected = made.id; await reload(); } catch (e) { toast(e.message, true); } };
+  nameIn.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); add(); } });
+
+  const dlg = h('div', { class: 'dlg-backdrop', onclick: (e) => { if (e.target === dlg) close(); } },
+    h('div', { class: 'dlg wide', role: 'dialog', 'aria-modal': 'true', 'aria-label': 'Channel lists' },
+      h('h2', {}, 'Your channel lists'), h('p', { class: 'dur' }, 'Group channels your own way and filter the guide by a list.'),
+      h('div', { class: 'll' }, h('div', { class: 'll-col' }, h('div', { class: 'inline' }, nameIn, h('button', { class: 'btn small', type: 'button', onclick: add }, 'Add')), listBox),
+        h('div', { class: 'll-col' }, search, chanBox)),
+      h('div', { class: 'dlg-actions' }, h('span'), h('button', { class: 'btn', type: 'button', onclick: close }, 'Done'))));
+  document.body.append(dlg);
+  document.addEventListener('keydown', onKey);
+  drawLists(); drawChannels();
 }

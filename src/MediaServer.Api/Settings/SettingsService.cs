@@ -2,6 +2,7 @@ using System.Globalization;
 using Microsoft.Extensions.Primitives;
 using MediaServer.Api.Data;
 using MediaServer.Api.LiveTv;
+using MediaServer.Api.Security;
 
 namespace MediaServer.Api.Settings;
 
@@ -23,7 +24,7 @@ public sealed class SettingsException(string key, string message) : Exception(me
 }
 
 /// <summary>A configuration source backed by the settings table, layered over appsettings and environment variables.</summary>
-public sealed class DbSettingsProvider(Database db) : ConfigurationProvider, IConfigurationSource
+public sealed class DbSettingsProvider(Database db, SecretBox? box = null) : ConfigurationProvider, IConfigurationSource
 {
     public IConfigurationProvider Build(IConfigurationBuilder builder) => this;
 
@@ -31,14 +32,17 @@ public sealed class DbSettingsProvider(Database db) : ConfigurationProvider, ICo
     {
         using var c = db.Open();
         var rows = Database.Query(c, "SELECT key, value FROM settings", r => (r.GetString(0), r.GetString(1)));
-        Data = rows.ToDictionary(r => r.Item1, r => (string?)r.Item2, StringComparer.OrdinalIgnoreCase);
+        // A value that can't be decrypted (the key was lost or replaced) is treated as not set, so the page asks for it again instead of failing.
+        Data = rows.Where(r => !r.Item1.StartsWith("auth.", StringComparison.Ordinal))
+            .Select(r => (r.Item1, Value: box is null ? r.Item2 : box.TryUnprotect(r.Item2, r.Item1))).Where(r => r.Value is not null)
+            .ToDictionary(r => r.Item1, r => r.Value, StringComparer.OrdinalIgnoreCase);
     }
 
     /// <summary>Re-reads the table and tells everything holding IConfiguration that values changed.</summary>
     public void Reload() { Load(); OnReload(); }
 }
 
-public sealed class SettingsService(Database db, DbSettingsProvider provider, IConfiguration config, TimeProvider time)
+public sealed class SettingsService(Database db, DbSettingsProvider provider, IConfiguration config, TimeProvider time, SecretBox? box = null)
 {
     private static SettingOption[] Opt(params (string V, string L)[] o) => o.Select(x => new SettingOption(x.V, x.L)).ToArray();
 
@@ -67,6 +71,7 @@ public sealed class SettingsService(Database db, DbSettingsProvider provider, IC
         new("Hls:MaxSessions", "streaming", "Simultaneous streams", "Starting one more stops the one nobody has touched the longest. Live TV counts as a stream.", SettingKind.Int, 1, 16, Default: "2"),
         new("Hls:MaxHeight", "streaming", "Largest transcode", "Transcodes are scaled down to this height. Originals that don't need transcoding are never changed.", SettingKind.Choice, Default: "1080", Options: Opt(("480", "480p"), ("720", "720p"), ("1080", "1080p"), ("1440", "1440p"), ("2160", "4K"))),
         new("Hls:IdleSeconds", "streaming", "Stop idle streams after", "A stream nobody is watching (a closed tab) is ended after this long.", SettingKind.Int, 30, 900, Default: "120", Unit: "seconds"),
+        new("Playback:Trickplay", "streaming", "Seek-bar previews", "Show a small picture when you hover or drag on the progress bar. The server reads each title once in the background to make them, which takes a while on large files.", SettingKind.Bool, Default: "true"),
         new("Playback:WatchedPercent", "streaming", "Mark as watched after", "Share of the runtime you must pass for a title to count as watched.", SettingKind.Int, 50, 100, Default: "92", Unit: "%"),
         new("Playback:CreditsSeconds", "streaming", "…or when this little is left", "Also counts as watched when this many seconds remain (credits).", SettingKind.Int, 0, 900, Default: "90", Unit: "seconds"),
 
@@ -76,6 +81,11 @@ public sealed class SettingsService(Database db, DbSettingsProvider provider, IC
         new("LiveTv:StreamOrigin", "livetv", "Stream address override", "Optional. Replaces the address in every stream URL, for when the playlist advertises one this server can't reach.", SettingKind.Url, Placeholder: "http://internal-host:9191"),
         new("LiveTv:AutoRefresh", "livetv", "Refresh automatically", "Re-import the channel list and guide on a schedule.", SettingKind.Bool, Default: "true"),
         new("LiveTv:RefreshMinutes", "livetv", "Refresh every", "At least 5.", SettingKind.Int, 5, 10080, Default: "360", Unit: "minutes"),
+
+        new("Recordings:MaxConcurrent", "livetv", "Recordings at once", "How many channels can be recorded at the same time.", SettingKind.Int, 1, 8, Default: "2"),
+        new("Recordings:BeforeSeconds", "livetv", "Start recording early by", "A little before a scheduled programme, in case it starts early.", SettingKind.Int, 0, 1800, Default: "60", Unit: "seconds"),
+        new("Recordings:AfterSeconds", "livetv", "Keep recording afterwards for", "Live TV often runs over.", SettingKind.Int, 0, 3600, Default: "120", Unit: "seconds"),
+        new("Recordings:KeepDays", "livetv", "Delete recordings after", "0 keeps them until you delete them yourself.", SettingKind.Int, 0, 3650, Default: "0", Unit: "days"),
 
         // network & security
         new("Auth:SessionDays", "network", "“Keep me signed in” lasts", "How long a remembered sign-in stays valid. Applies to new sign-ins.", SettingKind.Int, 1, 365, Default: "30", Unit: "days"),
@@ -129,7 +139,9 @@ public sealed class SettingsService(Database db, DbSettingsProvider provider, IC
     private Dictionary<string, string> Saved()
     {
         using var c = db.Open();
-        return Database.Query(c, "SELECT key, value FROM settings", r => (r.GetString(0), r.GetString(1))).ToDictionary(r => r.Item1, r => r.Item2, StringComparer.OrdinalIgnoreCase);
+        return Database.Query(c, "SELECT key, value FROM settings WHERE key NOT LIKE 'auth.%'", r => (r.GetString(0), r.GetString(1)))
+            .Select(r => (r.Item1, Value: box is null ? r.Item2 : box.TryUnprotect(r.Item2, r.Item1))).Where(r => r.Value is not null)
+            .ToDictionary(r => r.Item1, r => r.Value!, StringComparer.OrdinalIgnoreCase);
     }
 
     /// <summary>Validates every change first and applies them together. A null or empty value removes the override.</summary>
@@ -157,10 +169,11 @@ public sealed class SettingsService(Database db, DbSettingsProvider provider, IC
             else
             {
                 if (old == value) continue;
+                var stored = box is not null && d.Kind is SettingKind.Secret or SettingKind.SecretUrl ? box.Protect(value, d.Key) : value;
                 Database.Execute(c, tx, """
                     INSERT INTO settings(key,value,updated_at) VALUES(@k,@v,@t)
                     ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at
-                    """, ("@k", d.Key), ("@v", value), ("@t", time.GetUtcNow().ToString("O", CultureInfo.InvariantCulture)));
+                    """, ("@k", d.Key), ("@v", stored), ("@t", time.GetUtcNow().ToString("O", CultureInfo.InvariantCulture)));
             }
             changed.Add(d.Key);
         }

@@ -10,8 +10,8 @@ const ACCENTS = {
 };
 const PREF_DEFAULTS = {
   accent: 'indigo', theme: 'midnight', text: 'normal', density: 'comfortable', view: 'auto', motion: 'auto',
-  homeGreeting: 'on', homeHero: 'on', heroRotate: 'on', homeQuick: 'on', homeContinue: 'on', homeLive: 'on', homeMovies: 'on', homeShows: 'on',
-  quality: 'original', autoplay: 'on', resume: 'resume', autonext: 'on', skip: '10', speed: '1', rememberVolume: 'on', volume: '1', muted: 'off',
+  homeMyList: 'on', homeGreeting: 'on', homeHero: 'on', heroRotate: 'on', homeQuick: 'on', homeContinue: 'on', homeLive: 'on', homeMovies: 'on', homeShows: 'on',
+  audioLang: '', quality: 'original', autoplay: 'on', resume: 'resume', autonext: 'on', skip: '10', speed: '1', rememberVolume: 'on', volume: '1', muted: 'off',
   cc: 'auto', ccLang: 'en', ccSize: '100', ccBg: 'shadow',
 };
 const pref = (k) => { const v = store('pref:' + k); return v == null || v === '' ? PREF_DEFAULTS[k] : v; };
@@ -25,7 +25,9 @@ function applyPrefs() {
   const root = document.documentElement;
   root.style.setProperty('--accent', a[0]); root.style.setProperty('--accent-2', a[1]);
   document.body.classList.toggle('dense', pref('density') === 'compact');
-  root.dataset.theme = pref('theme') === 'black' ? 'black' : 'midnight';
+  const t = pref('theme');
+  root.dataset.theme = t === 'black' ? 'black' : t === 'light' ? 'light' : t === 'auto' ? (matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'midnight') : 'midnight';
+  document.querySelector('meta[name="theme-color"]')?.setAttribute('content', root.dataset.theme === 'light' ? '#f4f5f8' : root.dataset.theme === 'black' ? '#000000' : '#0a0c10');
   root.classList.toggle('text-large', pref('text') === 'large');
   document.body.classList.toggle('reduce-motion', pref('motion') === 'reduce');
   let st = document.getElementById('cue-style');
@@ -40,16 +42,18 @@ const skipSeconds = () => Math.min(60, Math.max(5, parseInt(pref('skip'), 10) ||
 // ================================================================ the page
 const SECTIONS = [
   ['appearance', 'Appearance', 'device'], ['home', 'Home page', 'device'], ['playback', 'Playback', 'device'], ['captions', 'Captions', 'device'], ['shortcuts', 'Keyboard shortcuts', 'device'],
-  ['general', 'General', 'server'], ['library', 'Library', 'server'], ['metadata', 'Posters & details', 'server'], ['streaming', 'Streaming & playback', 'server'], ['livetv', 'Live TV', 'server'],
+  ['general', 'General', 'server'], ['users', 'People', 'server'], ['library', 'Library', 'server'], ['metadata', 'Posters & details', 'server'], ['streaming', 'Streaming & playback', 'server'], ['livetv', 'Live TV & recording', 'server'],
   ['network', 'Network & security', 'server'], ['maintenance', 'Maintenance', 'server'], ['logs', 'Logs', 'server'], ['system', 'System & about', 'server'],
   ['account', 'Account & devices', 'account'],
 ];
 
 async function showSettings(section) {
-  const current = SECTIONS.some((s) => s[0] === section) ? section : 'appearance';
+  // Ordinary people only see their own preferences and account; the server's configuration is for administrators.
+  const visible = SECTIONS.filter(([, , kind]) => kind !== 'server' || isAdmin());
+  const current = visible.some((s) => s[0] === section) ? section : 'appearance';
   const body = h('div', { class: 'set-body' });
-  const nav = h('nav', { class: 'set-nav', 'aria-label': 'Settings sections' }, SECTIONS.map(([id, label, kind], i) => [
-    i === 0 ? h('div', { class: 'set-sep' }, 'This device') : kind === 'server' && SECTIONS[i - 1][2] === 'device' ? h('div', { class: 'set-sep' }, 'Server')
+  const nav = h('nav', { class: 'set-nav', 'aria-label': 'Settings sections' }, visible.map(([id, label, kind], i) => [
+    i === 0 ? h('div', { class: 'set-sep' }, 'This device') : kind === 'server' && visible[i - 1][2] === 'device' ? h('div', { class: 'set-sep' }, 'Server')
       : kind === 'account' ? h('div', { class: 'set-sep' }, 'You') : null,
     h('a', { href: `#/settings/${id}`, class: id === current ? 'on' : '' }, label),
   ]));
@@ -61,6 +65,7 @@ async function showSettings(section) {
   else if (current === 'captions') captionsPanel(body);
   else if (current === 'shortcuts') shortcutsPanel(body);
   else if (current === 'account') await accountPanel(body);
+  else if (current === 'users') await usersPanel(body);
   else if (current === 'maintenance') maintenancePanel(body);
   else if (current === 'logs') await logsPanel(body);
   else if (current === 'system') await systemPanel(body);
@@ -86,7 +91,7 @@ function appearancePanel(body) {
   paint();
   body.append(h('h2', {}, 'Appearance'),
     field('Accent colour', 'Buttons, progress bars and highlights.', sw),
-    field('Theme', 'Black suits OLED screens and dark rooms.', choice('theme', { midnight: 'Midnight', black: 'Pure black' })),
+    field('Theme', 'Black suits OLED screens and dark rooms. Auto follows your device.', choice('theme', { midnight: 'Midnight', black: 'Pure black', light: 'Light', auto: 'Auto' })),
     field('Text size', null, choice('text', { normal: 'Default', large: 'Large' })),
     field('Grid density', 'Compact fits more titles on screen.', choice('density', { comfortable: 'Comfortable', compact: 'Compact' })),
     field('Animations', 'Auto follows your device’s “reduce motion” setting.', choice('motion', { auto: 'Auto', reduce: 'Reduce' })),
@@ -101,6 +106,7 @@ function homePanel(body) {
     row('heroRotate', 'Rotate the banner automatically', null),
     row('homeQuick', 'Quick buttons', 'Random movie, random episode, Live TV.'),
     row('homeContinue', 'Continue Watching', null),
+    row('homeMyList', 'My List', 'Titles you saved to watch later.'),
     row('homeLive', 'Live TV row', 'Only appears when Live TV is set up.'),
     row('homeMovies', 'Recently added movies', null),
     row('homeShows', 'Recently added shows', null));
@@ -116,6 +122,8 @@ function playbackPanel(body) {
     APP.allowTranscoding
       ? field('Preferred quality', 'Original plays the file untouched whenever this device can. Lower options always re-encode, so use them on slow connections.', qSeg)
       : h('p', { class: 'hint' }, 'Transcoding is turned off on this server, so videos always play at their original quality.'),
+    field('Preferred audio language', 'A code such as en, es, ja (or the language name). When a file has a track in that language, it is used instead of the file’s default. Leave empty to use the default.',
+      h('input', { class: 'dlg-input short', type: 'text', value: pref('audioLang'), maxlength: '12', placeholder: 'default', 'aria-label': 'Preferred audio language', onchange: (e) => setPref('audioLang', e.target.value.trim().toLowerCase()) })),
     field('Start playing automatically', 'Off opens the player paused.', toggle(pref('autoplay') === 'on', (on) => setPref('autoplay', on ? 'on' : 'off'))),
     field('When a title was started before', null, choice('resume', { resume: 'Resume', start: 'Start over' })),
     field('Play the next episode automatically', 'When an episode ends.', toggle(pref('autonext') === 'on', (on) => setPref('autonext', on ? 'on' : 'off'))),
@@ -235,7 +243,8 @@ async function serverPanel(body, groupId) {
   }
   const folders = groupId === 'library' ? h('div', { class: 'folders-block' }, h('h3', {}, 'Media folders')) : null;
   if (folders) { body.append(h('h2', {}, group.title), h('p', { class: 'hint' }, group.description), folders); await folderManager(folders, {}); }
-  body.append(...(folders ? [h('h3', { class: 'sub' }, 'Scanning')] : [h('h2', {}, group.title), h('p', { class: 'hint' }, group.description)]), ...rows, h('div', { class: 'actions-row' }, save, status), tools.length ? h('div', { class: 'actions-row' }, ...tools) : null);
+  const extra = groupId === 'network' ? [await httpsCard()] : groupId === 'livetv' ? [recordingsNote()] : [];
+  body.append(...(folders ? [h('h3', { class: 'sub' }, 'Scanning')] : [h('h2', {}, group.title), h('p', { class: 'hint' }, group.description)]), ...rows, h('div', { class: 'actions-row' }, save, status), tools.length ? h('div', { class: 'actions-row' }, ...tools) : null, ...extra);
 }
 
 // ================================================================ media folders
@@ -471,6 +480,7 @@ async function accountPanel(body) {
     } }, 'Sign out everywhere else')),
     h('h3', { class: 'sub' }, 'Change password'),
     h('div', { class: 'pwform' }, cur.el, n1.el, n2.el, h('div', { class: 'actions-row flush' }, btn, out)),
+    h('h3', { class: 'sub' }, 'Security'), await twoFactorBlock(),
     resetBlock());
   loadDevices();
 }
@@ -483,4 +493,126 @@ function resetBlock() {
       ['quality', 'view', 'dismiss-tmdb'].forEach((k) => { try { localStorage.removeItem(k); } catch { /* ignore */ } });
       applyPrefs(); toast('Preferences reset'); showSettings('account');
     } }, 'Reset')));
+}
+
+// ================================================================ HTTPS, recordings note
+async function httpsCard() {
+  let s = null;
+  try { s = await api('/api/system/https'); } catch { /* not available */ }
+  if (!s) return h('div');
+  return h('div', { class: 'panel', style: 'margin-top:22px' }, h('h3', {}, 'Encrypted connection (HTTPS)'),
+    s.requestIsSecure ? h('p', { class: 'save-status good' }, 'You are connected over HTTPS.') : h('p', { class: 'save-status bad' }, 'You are connected over plain HTTP: passwords and sign-in cookies cross the network unencrypted.'),
+    s.enabled
+      ? h('div', {}, h('p', { class: 'hint' }, `The server also listens for HTTPS on port ${s.port}${s.selfSigned ? ' with a self-signed certificate. Browsers will ask you to trust it once; install the certificate on each device to make the warning go away.' : '.'}`),
+        s.selfSigned ? h('a', { class: 'btn glass small', href: '/certificate.cer', download: '' }, 'Download certificate') : null)
+      : h('p', { class: 'hint' }, 'Built-in HTTPS is off. Either terminate TLS in your reverse proxy (recommended), or set Https__Enabled=true on the server to add an HTTPS port with a self-signed certificate (Https__Hostnames adds names to it).'));
+}
+
+const recordingsNote = () => h('p', { class: 'hint', style: 'margin-top:18px' }, 'Recordings are saved in the recordings folder (Recordings__Directory, by default next to the database) and appear under Recordings. Make sure that folder has plenty of free space.');
+
+// ================================================================ people
+async function usersPanel(body) {
+  const list = h('div', { class: 'folder-list' });
+  const call = async (method, url, payload) => {
+    const res = await fetch(url, { method, headers: payload ? { 'content-type': 'application/json' } : undefined, body: payload ? JSON.stringify(payload) : undefined });
+    const j = res.status === 204 ? {} : await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(j.error || `Server error (${res.status})`);
+    return j;
+  };
+  async function load() {
+    const d = await api('/api/users');
+    list.replaceChildren(...d.users.map((u) => {
+      const me = u.username === AUTH.user;
+      const role = h('select', { class: 'sort', 'aria-label': `Role of ${u.username}`, onchange: async (e) => { try { await call('PATCH', `/api/users/${u.id}`, { role: e.target.value }); toast('Role changed'); if (me) location.reload(); } catch (err) { toast(err.message, true); e.target.value = u.role; } } },
+        h('option', { value: 'admin', selected: u.role === 'admin' }, 'Administrator'), h('option', { value: 'user', selected: u.role === 'user' }, 'Person'));
+      return h('div', { class: 'folder' },
+        h('div', { class: 'folder-info' }, h('strong', {}, u.displayName || u.username, ' ', me ? h('span', { class: 'badge-s ok' }, 'You') : null, u.twoFactor ? h('span', { class: 'badge-s' }, '2-step') : null),
+          h('small', {}, `${u.username} · ${u.sessions} signed-in device${u.sessions === 1 ? '' : 's'} · joined ${new Date(u.createdAt).toLocaleDateString()}`)),
+        h('div', { class: 'folder-actions' }, role,
+          h('button', { class: 'btn glass small', type: 'button', onclick: () => {
+            const pw = prompt(`New password for ${u.username} (8+ characters). They will be signed out everywhere.`);
+            if (pw) call('POST', `/api/users/${u.id}/password`, { password: pw }).then(() => toast('Password changed')).catch((err) => toast(err.message, true));
+          } }, 'Reset password'),
+          u.twoFactor ? h('button', { class: 'btn glass small', type: 'button', onclick: () => { if (confirm(`Turn off two-step sign-in for ${u.username}?`)) call('POST', `/api/users/${u.id}/two-factor/reset`).then(() => { toast('Turned off'); load(); }).catch((err) => toast(err.message, true)); } }, 'Reset 2-step') : null,
+          me ? null : h('button', { class: 'btn glass small red', type: 'button', onclick: () => {
+            if (confirm(`Delete ${u.username}? Their watch history and My List are deleted too. This can’t be undone.`)) call('DELETE', `/api/users/${u.id}`).then(() => { toast('Removed'); load(); }).catch((err) => toast(err.message, true));
+          } }, 'Delete')));
+    }));
+  }
+  const nu = h('input', { class: 'dlg-input', type: 'text', autocomplete: 'off', 'aria-label': 'New username', placeholder: 'Username', maxlength: '32' });
+  const nd = h('input', { class: 'dlg-input', type: 'text', autocomplete: 'off', 'aria-label': 'New display name', placeholder: 'Name shown (optional)', maxlength: '40' });
+  const np = h('input', { class: 'dlg-input', type: 'password', autocomplete: 'new-password', 'aria-label': 'New password', placeholder: 'Password (8+ characters)' });
+  const nr = h('select', { class: 'sort', 'aria-label': 'New role' }, h('option', { value: 'user' }, 'Person'), h('option', { value: 'admin' }, 'Administrator'));
+  const out = h('span', { class: 'save-status' });
+  const add = h('button', { class: 'btn', type: 'button', onclick: async () => {
+    out.className = 'save-status';
+    try { await call('POST', '/api/users', { username: nu.value.trim(), password: np.value, displayName: nd.value.trim() || null, role: nr.value }); nu.value = nd.value = np.value = ''; out.textContent = 'Added.'; out.className = 'save-status good'; load(); }
+    catch (err) { out.textContent = err.message; out.className = 'save-status bad'; }
+  } }, 'Add person');
+  body.append(h('h2', {}, 'People'), h('p', { class: 'hint' }, 'Everyone signs in with their own account and has their own watch history, My List and recordings. Administrators can also change settings.'), list,
+    h('h3', { class: 'sub' }, 'Add a person'), h('div', { class: 'pwform' }, nu, nd, np, nr, h('div', { class: 'actions-row flush' }, add, out)));
+  await load();
+}
+
+// ================================================================ two-step sign-in (in Account)
+const qrSvg = (text) => {
+  const q = qrcode(0, 'M'); q.addData(text); q.make();
+  return new DOMParser().parseFromString(q.createSvgTag({ cellSize: 5, margin: 2, scalable: true }), 'image/svg+xml').documentElement;   // parsed as XML, never as HTML
+};
+
+async function twoFactorBlock() {
+  const box = h('div', { class: 'panel' });
+  async function draw() {
+    let st; try { st = await api('/api/auth/2fa'); } catch { return; }
+    box.replaceChildren(h('h3', {}, 'Two-step sign-in'));
+    if (st.enabled) {
+      const out = h('p', { class: 'save-status' });
+      box.append(h('p', { class: 'save-status good' }, `On · ${st.recoveryCodesLeft} recovery code${st.recoveryCodesLeft === 1 ? '' : 's'} left`),
+        h('p', { class: 'hint' }, 'Signing in asks for a code from your authenticator app after your password.'),
+        h('div', { class: 'actions-row flush' },
+          h('button', { class: 'btn glass small', type: 'button', onclick: async () => {
+            const pw = prompt('Your password, to make new recovery codes (the old ones stop working):'); if (!pw) return;
+            const r = await postJson('/api/auth/2fa/recovery-codes', { password: pw });
+            if (!r.ok) { out.textContent = r.json.error || 'Could not do that.'; out.className = 'save-status bad'; return; }
+            showCodes(r.json.recoveryCodes); draw();
+          } }, 'New recovery codes'),
+          h('button', { class: 'btn glass small red', type: 'button', onclick: async () => {
+            const pw = prompt('Your password:'); if (!pw) return; const code = prompt('A code from your authenticator app (or a recovery code):'); if (!code) return;
+            const r = await postJson('/api/auth/2fa/disable', { password: pw, code });
+            if (!r.ok && r.status !== 204) { out.textContent = r.json.error || 'Could not turn it off.'; out.className = 'save-status bad'; return; }
+            toast('Two-step sign-in is off'); draw();
+          } }, 'Turn off')), out);
+      return;
+    }
+    box.append(h('p', { class: 'hint' }, 'Protect your account with a code from an authenticator app (Google Authenticator, 1Password, Authy…) in addition to your password.'),
+      h('button', { class: 'btn glass small', type: 'button', onclick: async () => {
+        const r = await postJson('/api/auth/2fa/begin', {});
+        if (!r.ok) { toast(r.json.error || 'Could not start.', true); return; }
+        const code = h('input', { class: 'dlg-input', type: 'text', inputmode: 'numeric', maxlength: '8', 'aria-label': 'Code from the app', placeholder: '6-digit code', autocomplete: 'one-time-code' });
+        const out = h('span', { class: 'save-status' });
+        const secret = r.json.secret.match(/.{1,4}/g).join(' ');
+        box.replaceChildren(h('h3', {}, 'Set up two-step sign-in'),
+          h('ol', { class: 'steps' }, h('li', {}, 'Scan this code with your authenticator app:', h('div', { class: 'qr' }, qrSvg(r.json.uri))),
+            h('li', {}, 'or enter this key by hand: ', h('code', {}, secret)), h('li', {}, 'Type the 6-digit code the app shows to confirm:')),
+          h('div', { class: 'inline' }, code, h('button', { class: 'btn', type: 'button', onclick: async () => {
+            const v = await postJson('/api/auth/2fa/enable', { code: code.value.trim() });
+            if (!v.ok) { out.textContent = v.json.error || 'That code isn’t right.'; out.className = 'save-status bad'; return; }
+            showCodes(v.json.recoveryCodes); draw();
+          } }, 'Turn on'), out));
+        code.focus();
+      } }, 'Set up'));
+  }
+  function showCodes(codes) {
+    const text = codes.join('\n');
+    const dlg = h('div', { class: 'dlg-backdrop' }, h('div', { class: 'dlg', role: 'dialog', 'aria-modal': 'true', 'aria-label': 'Recovery codes' },
+      h('h2', {}, 'Save your recovery codes'),
+      h('p', { class: 'dur' }, 'If you lose your phone, each of these signs you in once. They are shown only now: keep them somewhere safe.'),
+      h('pre', { class: 'codes' }, text),
+      h('div', { class: 'dlg-actions' },
+        h('button', { class: 'btn glass small', type: 'button', onclick: async () => { try { await navigator.clipboard.writeText(text); toast('Copied'); } catch { toast('Could not copy', true); } } }, 'Copy'),
+        h('button', { class: 'btn', type: 'button', onclick: () => dlg.remove() }, 'I’ve saved them'))));
+    document.body.append(dlg);
+  }
+  await draw();
+  return box;
 }

@@ -4,7 +4,7 @@ using MediaServer.Api.Library;
 namespace MediaServer.Api.Endpoints;
 
 public sealed record StartHlsRequest(long MediaId, string? Video = null, string? Audio = null, string? Containers = null, bool ForceTranscode = false,
-    double StartSeconds = 0, string? Quality = null);
+    double StartSeconds = 0, string? Quality = null, int? AudioIndex = null, int? BurnSubtitle = null);
 
 public static class HlsEndpoints
 {
@@ -17,7 +17,7 @@ public static class HlsEndpoints
                 if (!double.IsFinite(body.StartSeconds) || body.StartSeconds < 0 || body.StartSeconds > 1_000_000)
                     return Results.BadRequest(new { error = "startSeconds is out of range" });
                 var s = await hls.StartAsync(body.MediaId, ct, ClientCaps.From(body.Video, body.Audio, body.Containers), body.ForceTranscode,
-                    body.StartSeconds, body.Quality);
+                    body.StartSeconds, body.Quality, body.AudioIndex, body.BurnSubtitle);
                 return Results.Ok(new { sessionId = s.Id, playlistUrl = $"/api/hls/{s.Id}/index.m3u8", mode = s.Mode, reason = s.Reason, vod = s.Vod });
             }
             catch (KeyNotFoundException) { return Results.NotFound(); }

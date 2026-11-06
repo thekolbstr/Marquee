@@ -27,6 +27,10 @@ public sealed partial class LibraryFolders(Database db, IConfiguration config, T
 
     public string? PrimaryRoot => config["Library:Root"] is { Length: > 0 } r ? System.IO.Path.GetFullPath(r) : null;
 
+    /// <summary>Where finished live-TV recordings are kept. It is part of the library (stored paths start with <c>@rec/</c>).</summary>
+    public const string RecordingsPrefix = "@rec/";
+    public string RecordingsRoot => System.IO.Path.GetFullPath(config["Recordings:Directory"] ?? System.IO.Path.Combine(System.IO.Path.GetDirectoryName(System.IO.Path.GetFullPath(config["Database:Path"] ?? "data/mediaserver.db"))!, "recordings"));
+
     private IReadOnlyList<(long Id, string Path, string Name, bool Enabled)> Rows()
     {
         using var c = db.Open();
@@ -39,6 +43,7 @@ public sealed partial class LibraryFolders(Database db, IConfiguration config, T
         var roots = new List<LibraryRoot>();
         if (PrimaryRoot is { } p) roots.Add(new LibraryRoot("", p, null));
         roots.AddRange(Rows().Where(r => r.Enabled).Select(r => new LibraryRoot(Prefix(r.Id), r.Path, r.Id)));
+        roots.Add(new LibraryRoot(RecordingsPrefix, RecordingsRoot, -1));          // optional: skipped while the folder doesn't exist yet
         return roots;
     }
 
@@ -47,6 +52,7 @@ public sealed partial class LibraryFolders(Database db, IConfiguration config, T
     /// <summary>Which folder a stored path lives in, and the path inside it. Null if the folder has been removed.</summary>
     public (string Root, string Relative)? Split(string stored)
     {
+        if (stored.StartsWith(RecordingsPrefix, StringComparison.Ordinal)) return (RecordingsRoot, stored[RecordingsPrefix.Length..]);
         var m = PrefixRx().Match(stored);
         if (!m.Success) return PrimaryRoot is { } p ? (p, stored) : null;
         var id = long.Parse(m.Groups[1].Value, CultureInfo.InvariantCulture);
@@ -55,14 +61,14 @@ public sealed partial class LibraryFolders(Database db, IConfiguration config, T
     }
 
     /// <summary>The path as the filename parser should see it (without the folder prefix).</summary>
-    public static string StripPrefix(string stored) => PrefixRx().Replace(stored, "", 1);
+    public static string StripPrefix(string stored) => stored.StartsWith(RecordingsPrefix, StringComparison.Ordinal) ? stored[RecordingsPrefix.Length..] : PrefixRx().Replace(stored, "", 1);
 
     public IReadOnlyList<LibraryFolderInfo> List()
     {
         var list = new List<LibraryFolderInfo>();
         using var c = db.Open();
         int Count(string where) => Convert.ToInt32(Database.Scalar(c, $"SELECT COUNT(*) FROM media_files WHERE deleted_at IS NULL AND {where}"), CultureInfo.InvariantCulture);
-        if (PrimaryRoot is { } p) list.Add(new LibraryFolderInfo(null, p, "Server library", true, "deployment", Directory.Exists(p), Count("path NOT LIKE '@f%'")));
+        if (PrimaryRoot is { } p) list.Add(new LibraryFolderInfo(null, p, "Server library", true, "deployment", Directory.Exists(p), Count("path NOT LIKE '@f%' AND path NOT LIKE '@rec/%'")));
         foreach (var r in Rows())
             list.Add(new LibraryFolderInfo(r.Id, r.Path, r.Name, r.Enabled, "ui", Directory.Exists(r.Path), Count($"path LIKE '@f{r.Id.ToString(CultureInfo.InvariantCulture)}/%'")));
         return list;
@@ -127,6 +133,7 @@ public sealed partial class LibraryFolders(Database db, IConfiguration config, T
 
     private IEnumerable<string> OwnDirectories()
     {
+        yield return RecordingsRoot;
         foreach (var key in new[] { "Database:Path", "Images:CacheDir", "Hls:TempDir" })
         {
             var v = config[key];

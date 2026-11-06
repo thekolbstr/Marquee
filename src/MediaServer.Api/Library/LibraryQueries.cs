@@ -30,8 +30,9 @@ public sealed record SeasonEntry(int? Season, IReadOnlyList<EpisodeEntry> Episod
 public sealed record SeriesDetail(string Title, int? Year, string? Overview, string? Genres, double? Rating,
     string? PosterUrl, string BackdropUrl, long? ResumeMediaId, IReadOnlyList<SeasonEntry> Seasons, long MatchMediaId);
 
-public sealed class LibraryQueries(Database db)
+public sealed class LibraryQueries(Database db, MediaServer.Api.Auth.IUserContext? users = null)
 {
+    private long UserId => users?.UserId ?? 1;
     private static readonly long NewWindowTicks = TimeSpan.FromDays(21).Ticks;
 
     private sealed record R(long Id, string Path, string Kind, string Title, int? Year, int? Season, int? Episode, int? EpisodeEnd,
@@ -70,7 +71,7 @@ public sealed class LibraryQueries(Database db)
                    COALESCE(p.position_seconds, 0), COALESCE(p.watched, 0), p.updated_at
             FROM media_files f
             LEFT JOIN metadata m ON m.tmdb_type=f.tmdb_type AND m.tmdb_id=f.tmdb_id
-            LEFT JOIN media_progress p ON p.media_id=f.id
+            LEFT JOIN media_progress p ON p.media_id=f.id AND p.user_id=@u
             WHERE f.deleted_at IS NULL AND COALESCE(f.kind,'Unknown') <> 'Extra'
             """, r =>
         {
@@ -79,12 +80,12 @@ public sealed class LibraryQueries(Database db)
             double? D(int i) => r.IsDBNull(i) ? null : r.GetDouble(i);
             return new R(r.GetInt64(0), r.GetString(1), r.GetString(2), r.GetString(3), I(4), I(5), I(6), I(7), S(8), S(9), D(10), S(11),
                 r.GetInt64(12), S(13), I(14), S(15), I(16), S(17), S(18), S(19), D(20), S(21), r.GetDouble(22), r.GetInt64(23) != 0, S(24));
-        });
+        }, ("@u", UserId));
     }
 
     // ------------------------------------------------------------------ browsing
 
-    public ItemList List(string? q, string? type, string sort, int limit, int offset, bool? matched = null, string? genre = null)
+    public ItemList List(string? q, string? type, string sort, int limit, int offset, bool? matched = null, string? genre = null, bool unlimited = false)
     {
         var rows = Load();
         var now = DateTime.UtcNow.Ticks;
@@ -100,7 +101,7 @@ public sealed class LibraryQueries(Database db)
                 Art(meta, rep.Id, 640), Art(meta, rep.Id, 1280), meta.Overview, g.Count(), meta.Matched, now - added < NewWindowTicks, meta.Rating, meta.Genres), added, g.Key));
         }
         // Movies (and unparseable files, so everything stays playable) -> one item per TMDB movie / per file.
-        foreach (var g in rows.Where(r => r.Kind != "Episode").GroupBy(r => r.Matched && r.TmdbType == "movie" ? $"tmdb:{r.TmdbId}" : $"file:{r.Id}"))
+        foreach (var g in rows.Where(r => r.Kind != "Episode" && r.Kind != "Recording").GroupBy(r => r.Matched && r.TmdbType == "movie" ? $"tmdb:{r.TmdbId}" : $"file:{r.Id}"))
         {
             var rep = g.OrderBy(r => r.Id).First();
             var added = g.Max(r => r.MtimeTicks);
@@ -128,7 +129,7 @@ public sealed class LibraryQueries(Database db)
             _ => query.OrderBy(i => SortKey(i.S.Title), StringComparer.Ordinal).ThenBy(i => i.S.Year ?? 0),
         };
         var all = sorted.Select(i => i.S).ToList();
-        return new ItemList(all.Count, all.Skip(Math.Max(0, offset)).Take(Math.Clamp(limit, 1, 200)).ToList());
+        return new ItemList(all.Count, all.Skip(Math.Max(0, offset)).Take(unlimited ? int.MaxValue : Math.Clamp(limit, 1, 200)).ToList());
     }
 
     private static bool HasGenre(string? genres, string wanted) =>
@@ -137,10 +138,34 @@ public sealed class LibraryQueries(Database db)
     /// <summary>Genres present in the library (most common first), optionally for movies or series only.</summary>
     public IReadOnlyList<(string Name, int Count)> Genres(string? type)
     {
-        var all = List(null, type, "title", 100_000, 0).Items;
+        var all = List(null, type, "title", 100_000, 0, unlimited: true).Items;
         return all.Where(i => i.Genres is not null).SelectMany(i => i.Genres!.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries).Distinct(StringComparer.OrdinalIgnoreCase))
             .GroupBy(g => g, StringComparer.OrdinalIgnoreCase).Select(g => (g.Key, g.Count())).OrderByDescending(g => g.Item2).ThenBy(g => g.Item1, StringComparer.OrdinalIgnoreCase).Take(40).ToList();
     }
+
+    /// <summary>The library items with these keys (movies by file id, shows by series key), in the order given. Keys that no longer exist are skipped.</summary>
+    public IReadOnlyList<ItemSummary> ItemsByKeys(IReadOnlyList<WatchlistKey> keys)
+    {
+        if (keys.Count == 0) return [];
+        var byKey = List(null, null, "title", 0, 0, unlimited: true).Items.ToDictionary(i => (i.Type, i.Key));
+        return keys.Select(k => byKey.GetValueOrDefault((k.Type, k.Key))).Where(i => i is not null).Select(i => i!).ToList();
+    }
+
+    /// <summary>The key My List stores for a title: a movie is its group's first file (whichever version you opened), a show is its series key. Null if there is no such title.</summary>
+    public string? CanonicalItemKey(string type, string key)
+    {
+        var rows = Load();
+        if (type == "series") return rows.Any(r => r.Kind == "Episode" && r.SeriesKey == key) ? key : null;
+        if (type != "movie" || !long.TryParse(key, NumberStyles.None, CultureInfo.InvariantCulture, out var id)) return null;
+        var row = rows.FirstOrDefault(r => r.Id == id && r.Kind != "Episode" && r.Kind != "Recording");
+        if (row is null) return null;
+        var group = row.Matched && row.TmdbType == "movie" ? rows.Where(r => r.Kind != "Episode" && r.Kind != "Recording" && r.Matched && r.TmdbType == "movie" && r.TmdbId == row.TmdbId) : [row];
+        return group.Min(r => r.Id).ToString(CultureInfo.InvariantCulture);
+    }
+
+    /// <summary>Every episode file of a show, or of one season of it, with its runtime (for marking things watched in bulk).</summary>
+    public IReadOnlyList<(long Id, double? Duration)> EpisodeFiles(string seriesKey, int? season)
+        => Load().Where(r => r.Kind == "Episode" && r.SeriesKey == seriesKey && (season is null || r.Season == season)).Select(r => (r.Id, r.Duration)).ToList();
 
     public sealed record RandomPick(long MediaId, string Title, string Kind);
 

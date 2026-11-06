@@ -43,6 +43,8 @@ const ICONS = {
   eye: { d: 'M1 12s4-7 11-7 11 7 11 7-4 7-11 7S1 12 1 12zM12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6z' },
   plus: { d: 'M12 5v14M5 12h14' },
   folder: { d: 'M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z' },
+  audio: { d: 'M11 5L6 9H3v6h3l5 4zM15.5 8.5a5 5 0 0 1 0 7M19 5a9 9 0 0 1 0 14' },
+  cast: { d: 'M3 18a3 3 0 0 1 3 3M3 14a7 7 0 0 1 7 7M3 10a11 11 0 0 1 11 11M3 6h16a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2h-3' },
   sliders: { d: 'M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M1 14h6M9 8h6M17 16h6' },
 };
 function icon(name) {
@@ -195,7 +197,7 @@ async function route() {
   document.title = APP.name;
   const { parts, params } = parseHash();
   const [page, arg] = parts;
-  const section = !page ? 'home' : page === 'movies' || page === 'movie' ? 'movies' : page === 'shows' || page === 'series' ? 'shows' : page === 'live' ? 'live' : '';
+  const section = !page ? 'home' : page === 'movies' || page === 'movie' ? 'movies' : page === 'shows' || page === 'series' ? 'shows' : page === 'live' ? 'live' : page === 'mylist' ? 'mylist' : page === 'recordings' ? 'recordings' : '';
   document.querySelectorAll('#nav a').forEach((a) => a.classList.toggle('active', a.dataset.route === section));
   if (page !== 'search') $('#search').value = '';
   else if (document.activeElement !== $('#search')) $('#search').value = arg || '';
@@ -208,6 +210,8 @@ async function route() {
     else if (page === 'unmatched') restore = await showList({ type: null, title: 'Needs a match', matched: false });
     else if (page === 'system') location.replace('#/settings/system');
     else if (page === 'settings') await showSettings(arg);
+    else if (page === 'mylist') await showMyList();
+    else if (page === 'recordings') await showRecordings();
     else if (page === 'welcome') await showWelcome();
     else if (page === 'live') { if (arg) await showLivePlayer(parseInt(arg, 10)); else await showLive(); }
     else if (page === 'movie' && arg) await showMovie(arg);
@@ -277,12 +281,13 @@ async function surprise(kind, genre) {
 // ================================================================ home
 async function showHome() {
   setView(h('div', { class: 'skel hero' }), h('div', { class: 'page' }, skelRow(), skelRow()));
-  const [movies, shows, cont, status, live] = await Promise.all([
+  const [movies, shows, cont, status, live, myList] = await Promise.all([
     api('/api/items?type=movie&sort=recent&limit=24'),
     api('/api/items?type=series&sort=recent&limit=24'),
     api('/api/continue?limit=12').catch(() => []),
     api('/api/library/status').catch(() => ({})),
     loadLiveChannelsForHome(),
+    api('/api/watchlist').then((d) => d.items.slice(0, 24)).catch(() => []),
   ]);
 
   if (movies.total + shows.total === 0) {
@@ -313,6 +318,7 @@ async function showHome() {
     live.length ? h('a', { class: 'chip', href: '#/live' }, 'Live TV') : null));
   if (cont.length && pref('homeContinue') === 'on') page.append(row('Continue Watching', cont.map(continueTile)));
   if (live.length && pref('homeLive') === 'on') page.append(row('Live TV', live.map(liveTile), '#/live'));
+  if (myList.length && pref('homeMyList') === 'on') page.append(row('My List', myList.map((i) => itemTile(i, posterShare(myList) >= POSTER_MIN)), '#/mylist', posterShare(myList) >= POSTER_MIN));
   const mPoster = posterShare(movies.items) >= POSTER_MIN, sPoster = posterShare(shows.items) >= POSTER_MIN;
   if (movies.items.length && pref('homeMovies') === 'on') page.append(row('Recently Added Movies', movies.items.map((i) => itemTile(i, mPoster)), '#/movies', mPoster));
   if (shows.items.length && pref('homeShows') === 'on') page.append(row('Recently Added Shows', shows.items.map((i) => itemTile(i, sPoster)), '#/shows', sPoster));
@@ -542,6 +548,7 @@ function openMatchDialog({ type, query, mediaId, scope, current, onDone }) {
 
 // "Matched to X (2016) · Fix match" line, shown only when TMDB is configured.
 async function matchLine({ type, query, mediaId, scope }) {
+  if (!isAdmin()) return null;   // fixing a match changes the shared library
   const status = await api('/api/library/status').catch(() => ({}));
   if (!status.tmdbConfigured) return null;
   const m = await api(`/api/media/${mediaId}/match`).catch(() => null);
@@ -597,6 +604,7 @@ async function showMovie(id) {
     h('dl', { class: 'kv' }, h('dt', {}, 'This browser'), h('dd', {}, modeLine(f)), tracks.map(([k, v]) => [h('dt', {}, k), h('dd', {}, v)])),
     m.otherVersions.length ? h('p', { class: 'dur' }, 'Other versions: ', m.otherVersions.map((v) => h('a', { href: `#/watch/${v.mediaId}`, style: 'margin-right:14px;text-decoration:underline' }, v.width ? `${v.width}×${v.height}` : v.fileName))) : null));
   const matchSlot = h('div');
+  const listed = await inMyList('movie', String(f.mediaId));
   matchLine({ type: 'movie', query: m.title, mediaId: f.mediaId, scope: 'file' }).then((el) => el && matchSlot.replaceWith(el));
   setView(
     h('div', { class: 'detail' }, heroBackdrop(m.backdropUrl, m.title),
@@ -608,12 +616,14 @@ async function showMovie(id) {
           matchSlot,
           h('div', { class: 'detail-actions' },
             h('a', { class: 'btn', href: `#/watch/${f.mediaId}` }, icon('play'), resume ? `Resume · ${fmtLeft(f.resumeSeconds, f.durationSeconds) || fmtRuntime(f.resumeSeconds)}` : 'Play'),
-            resume ? h('a', { class: 'btn glass', href: `#/watch/${f.mediaId}?t=0` }, 'Start over') : null)))),
+            resume ? h('a', { class: 'btn glass', href: `#/watch/${f.mediaId}?t=0` }, 'Start over') : null,
+            myListButton('movie', String(f.mediaId), listed))))),
     info);
 }
 
 async function showSeries(key) {
   const s = await api(`/api/items/series/${encodeURIComponent(key)}`);
+  const listed = await inMyList('series', key);
   document.title = `${s.title} · ${APP.name}`;
   const total = s.seasons.reduce((n, x) => n + x.episodes.length, 0);
   const meta = [s.year, `${total} episode${total === 1 ? '' : 's'}`, s.rating ? `★ ${s.rating.toFixed(1)}` : null, s.genres].filter(Boolean);
@@ -659,8 +669,9 @@ async function showSeries(key) {
               const fresh = all.filter((e) => !e.watched);
               const pool = fresh.length ? fresh : all;
               location.hash = `#/watch/${pool[Math.floor(Math.random() * pool.length)].mediaId}`;
-            } }, icon('dice'), 'Random episode')) : null))),
-    h('div', { class: 'section' }, pills, list));
+            } }, icon('dice'), 'Random episode'),
+            myListButton('series', key, listed)) : null))),
+    h('div', { class: 'section' }, h('div', { class: 'seasonbar' }, pills, watchedMenu(key, () => s.seasons[current], () => route())), list));
   renderSeason();
 }
 
@@ -738,7 +749,8 @@ function buildControls(video, stage, f, wake) {
   const fsBtn = btn('expand', 'Full screen', () => toggleFullscreen());
   const cur = h('span', { class: 'time' }, '0:00'), dur = h('span', { class: 'time' }, fmt(total()));
   const buf = h('i', { class: 'buf' }), fill = h('i', { class: 'fill' }), knob = h('b', { class: 'knob' });
-  const hint = h('span', { class: 'scrub-hint hidden' });
+  const preview = trickplayPreview(f);
+  const hint = h('div', { class: 'scrub-hint hidden' }, preview.el);
   const bar = h('div', { class: 'seekbar', role: 'slider', tabindex: '0', 'aria-label': 'Seek', 'aria-valuemin': '0' }, buf, fill, knob, hint);
   const vol = h('input', { class: 'vol', type: 'range', min: '0', max: '1', step: '0.05', value: String(video.volume), 'aria-label': 'Volume' });
   vol.addEventListener('input', () => { video.volume = parseFloat(vol.value); video.muted = false; });
@@ -760,7 +772,7 @@ function buildControls(video, stage, f, wake) {
   bar.addEventListener('pointerdown', (e) => { scrubbing = true; bar.setPointerCapture(e.pointerId); scrubT = frac(e) * total(); paint(); });
   bar.addEventListener('pointermove', (e) => {
     const x = frac(e), t = x * total();
-    hint.textContent = fmt(t); hint.style.left = `${x * 100}%`; hint.classList.remove('hidden');
+    preview.show(t, fmt(t)); hint.style.left = `${x * 100}%`; hint.classList.remove('hidden');
     if (scrubbing) { scrubT = t; paint(); }
   });
   bar.addEventListener('pointerleave', () => hint.classList.add('hidden'));
@@ -805,7 +817,7 @@ const LANG_ALIASES = { eng: 'en', english: 'en', spa: 'es', spanish: 'es', fre: 
   swe: 'sv', swedish: 'sv', pol: 'pl', polish: 'pl', tur: 'tr', turkish: 'tr', ara: 'ar', arabic: 'ar', hin: 'hi', hindi: 'hi' };
 const langKey = (l) => { const k = String(l || '').toLowerCase().split(/[-_ .]/)[0]; return LANG_ALIASES[k] || k.slice(0, 2); };
 
-async function setupCaptions(video, stage, f, ui, wake) {
+async function setupCaptions(video, stage, f, ui, wake, burnIn) {
   const tracks = (await api(`/api/media/${f.mediaId}/captions`)).tracks || [];
   if (!tracks.length) return; // nothing to show: no button
   const btn = h('button', { class: 'cbtn', type: 'button', title: 'Captions (C)', 'aria-label': 'Captions', 'aria-haspopup': 'true' }, icon('cc'));
@@ -815,6 +827,7 @@ async function setupCaptions(video, stage, f, ui, wake) {
   function select(t) {
     video.querySelectorAll('track').forEach((x) => x.remove());
     for (const x of video.textTracks) x.mode = 'disabled';
+    if (PLAY_EXTRA.burnSubtitle != null && (!t || t.supported !== false)) burnIn(null);    // leaving a burned-in track: back to normal playback
     active = t ? t.id : null;
     btn.classList.toggle('on', !!t);
     if (t) {
@@ -826,16 +839,24 @@ async function setupCaptions(video, stage, f, ui, wake) {
     }
   }
   function renderMenu() {
-    menu.replaceChildren(...[{ id: null, label: 'Off' }, ...tracks].map((t) => h('button', {
-      type: 'button', role: 'menuitemradio', 'aria-checked': String(active === t.id), class: active === t.id ? 'on' : '', disabled: t.supported === false ? true : null,
-      onclick: () => { select(t.id ? t : null); menu.classList.add('hidden'); },
-    }, h('span', {}, t.label, t.forced ? ' (forced)' : ''), h('small', {}, active === t.id ? '✓' : t.supported === false ? 'picture-based' : t.source === 'file' ? 'file' : ''))));
+    menu.replaceChildren(...[{ id: null, label: 'Off' }, ...tracks].map((t) => {
+      const picture = t.supported === false;
+      const burnable = picture && APP.allowTranscoding && /^e\d+$/.test(t.id || '');
+      const on = picture ? PLAY_EXTRA.burnSubtitle === Number((t.id || '').slice(1)) : active === t.id && PLAY_EXTRA.burnSubtitle == null;
+      return h('button', { type: 'button', role: 'menuitemradio', 'aria-checked': String(on), class: on ? 'on' : '', disabled: picture && !burnable ? true : null,
+        onclick: () => {
+          menu.classList.add('hidden');
+          if (burnable) { select(null); active = t.id; btn.classList.add('on'); burnIn(Number(t.id.slice(1))); return; }   // drawn onto the picture: needs a re-encode
+          select(t.id ? t : null);
+        } }, h('span', {}, t.label, t.forced ? ' (forced)' : ''), h('small', {}, on ? '✓' : picture ? (burnable ? 'burn in' : 'picture-based') : t.source === 'file' ? 'file' : ''));
+    }));
   }
   btn.addEventListener('click', () => { renderMenu(); menu.classList.toggle('hidden'); wake(); });
   stage.addEventListener('click', (e) => { if (!menu.contains(e.target) && !btn.contains(e.target)) menu.classList.add('hidden'); });
   ui.slot.after(btn);
   stage.append(menu);
   const usable = tracks.filter((t) => t.supported !== false);
+  const originalSelect = select;
   ui.toggleCaptions = () => {
     if (active) { select(null); toast('Captions off'); return; }
     const t = pickDefault(usable, true) || usable[0];
@@ -862,8 +883,20 @@ const QUALITIES = [
 const qualitiesFor = (f) => QUALITIES.filter((q) => f.width && q.width <= f.width * 1.05);
 const savedQuality = () => store('quality') || 'original';
 
+// Choices that need the server to prepare the stream (reset for every title).
+let PLAY_EXTRA = { audioIndex: null, burnSubtitle: null };
+const defaultAudioIndex = (f) => ((f.audio || []).find((a) => a.isDefault) || (f.audio || [])[0] || {}).index;
+// A track in your preferred language (Settings → Playback) wins over the file's default, when there is one.
+function preferredAudioIndex(f) {
+  const want = langKey(pref('audioLang'));
+  if (!want || (f.audio || []).length < 2) return null;
+  const hit = f.audio.find((a) => langKey(a.language) === want);
+  return hit && hit.index !== defaultAudioIndex(f) ? hit.index : null;
+}
+
 async function showPlayer(id, params) {
   const f = await api(`/api/media/${encodeURIComponent(id)}/play?${capsQuery()}`);
+  PLAY_EXTRA = { audioIndex: preferredAudioIndex(f), burnSubtitle: null };
   const token = playerToken;
   if (token !== playerToken) return;
   document.title = `${f.title} · ${APP.name}`;
@@ -887,7 +920,12 @@ async function showPlayer(id, params) {
   const wakeRef = () => wake();
   const ui = buildControls(video, stage, f, wakeRef);
   stage.append(ui.el);
-  setupCaptions(video, stage, f, ui, wakeRef).catch(() => {}); // captions are optional: never let them hold up playback
+  // Optional extras: none of them may ever hold up playback.
+  setupCaptions(video, stage, f, ui, wakeRef, (idx) => reloadPlayback({ burnSubtitle: idx })).catch(() => {});
+  setupSkip(video, stage, f, wakeRef).catch(() => {});
+  setupAudio(stage, f, ui, wakeRef, () => PLAY_EXTRA.audioIndex ?? defaultAudioIndex(f), (idx) => reloadPlayback({ audioIndex: idx }));
+  setupAirPlay(video, ui);
+  setupCast(video, f, ui, () => video.currentTime || 0);
 
   function leave() { if (history.length > 1) history.back(); else location.hash = '#/'; }
   let quality = savedQuality();
@@ -937,21 +975,26 @@ async function showPlayer(id, params) {
     qMenu.replaceChildren(...rows.map((r) => h('button', { type: 'button', role: 'menuitemradio', 'aria-checked': String(r.name === quality), class: r.name === quality ? 'on' : '', onclick: () => chooseQuality(r.name) },
       h('span', {}, r.label), h('small', {}, r.name === quality ? '✓' : r.note))));
   }
-  async function chooseQuality(name) {
-    qMenu.classList.add('hidden');
-    if (name === quality) return;
+  // Restart playback from the same moment, optionally changing the audio track / subtitles burned in / quality.
+  async function reloadPlayback(change, notice = 'Switching…') {
+    Object.assign(PLAY_EXTRA, change);
     const at = video.currentTime || 0, wasPlaying = !video.paused;
-    quality = name; store('quality', name);
     saveNow();
     ctl.stop(); // ends the current stream (direct listeners or the server-side session)
     video.removeAttribute('src'); video.load();
     await sleep(80); // let the element flush events queued by clearing the source
-    report('remux', 'Switching quality…');
+    report('remux', notice);
     try {
-      if (name === 'original') await startPlayback(video, f, report, ctl, at);
-      else await startHls(video, f, report, ctl, at, false, name);
+      if (quality === 'original') await startPlayback(video, f, report, ctl, at);
+      else await startHls(video, f, report, ctl, at, false, quality);
       if (wasPlaying) video.play().catch(() => {});
-    } catch (e) { report('error', e.message); toast(e.message || 'Could not switch quality', true); }
+    } catch (e) { report('error', e.message); toast(e.message || 'Could not switch', true); }
+  }
+  async function chooseQuality(name) {
+    qMenu.classList.add('hidden');
+    if (name === quality) return;
+    quality = name; store('quality', name);
+    await reloadPlayback({}, 'Switching quality…');
   }
   if (qBtn) {
     qBtn.addEventListener('click', () => { renderQualityMenu(); qMenu.classList.toggle('hidden'); wake(); });
@@ -1045,7 +1088,8 @@ function seekWhenReady(video, ctl, t, report) {
 // Cheapest path first: direct play, then direct stream (HLS with the video copied), then transcode. Each step also
 // acts as the fallback for the one before it, in case a browser claims support it doesn't actually have.
 async function startPlayback(video, f, report, ctl, start) {
-  if (f.mode !== 'direct') { await startHls(video, f, report, ctl, start, false); return; }
+  // Another audio track, or subtitles drawn onto the picture, can't be done by the browser alone: the server prepares a stream.
+  if (f.mode !== 'direct' || PLAY_EXTRA.audioIndex != null || PLAY_EXTRA.burnSubtitle != null) { await startHls(video, f, report, ctl, start, false); return; }
   report('direct', f.reason); // (also resets the label after a quality switch)
 
   let fellBack = false;
@@ -1070,7 +1114,8 @@ async function startHls(video, f, report, ctl, resumeAt, forceTranscode, quality
   report('remux', 'Preparing stream…');
   const res = await fetch('/api/hls/start', {
     method: 'POST', headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ mediaId: f.mediaId, video: CAPS.v, audio: CAPS.a, containers: CAPS.c, forceTranscode, startSeconds: resumeAt > 1 ? resumeAt : 0, quality: quality && quality !== 'original' ? quality : null }),
+    body: JSON.stringify({ mediaId: f.mediaId, video: CAPS.v, audio: CAPS.a, containers: CAPS.c, forceTranscode, startSeconds: resumeAt > 1 ? resumeAt : 0, quality: quality && quality !== 'original' ? quality : null,
+      audioIndex: PLAY_EXTRA.audioIndex ?? null, burnSubtitle: PLAY_EXTRA.burnSubtitle ?? null }),
   });
   if (!res.ok) {
     let detail = '';
@@ -1142,6 +1187,8 @@ document.addEventListener('keydown', (e) => {
 });
 
 applyPrefs();
+// Installable app + offline page shell. (Browsers only allow this on https:// or localhost.)
+if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost')) navigator.serviceWorker.register('/sw.js').catch(() => {});
 let appStarted = false;
 function startApp() {
   document.body.classList.remove('auth-screen');
@@ -1158,7 +1205,7 @@ function startApp() {
   let st;
   try { st = await (await fetch('/api/auth/state', { cache: 'no-store' })).json(); }
   catch { view.replaceChildren(h('div', { class: 'error' }, 'Can’t reach the server. Check that it’s running, then reload.')); return; }
-  AUTH.enabled = st.authEnabled; AUTH.user = st.user; AUTH.name = st.name; AUTH.displayName = st.displayName; applyServerName(st.serverName);
+  AUTH.enabled = st.authEnabled; AUTH.user = st.user; AUTH.name = st.name; AUTH.displayName = st.displayName; AUTH.role = st.role || 'admin'; applyServerName(st.serverName);
   if (st.setupRequired) { showSetup(st, () => { location.hash = '#/welcome'; startApp(); }); return; }
   if (!st.authenticated) { showLogin(startApp); return; }
   startApp();

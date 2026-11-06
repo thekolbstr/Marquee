@@ -30,15 +30,16 @@ public static class LiveTvEndpoints
 
         app.MapGet("/api/live/groups", (LiveTvService live) => Results.Ok(live.Groups()));
 
-        app.MapGet("/api/live/channels", (LiveTvService live, string? group, string? search, bool? favorites, int? limit, int? offset) =>
-            Results.Ok(live.Channels(group, search, favorites == true, limit ?? 100, offset ?? 0)));
+        app.MapGet("/api/live/channels", (LiveTvService live, MediaServer.Api.Recording.LiveListService lists, string? group, string? search, bool? favorites, int? limit, int? offset, long? list) =>
+            list is { } l && !lists.Owns(l) ? Results.NotFound() : Results.Ok(live.Channels(group, search, favorites == true, limit ?? 100, offset ?? 0, list)));
 
         // The timeline guide: channels with their programmes for a window (default: from the last half hour, 6 hours).
-        app.MapGet("/api/live/guide", (LiveTvService live, TimeProvider time, string? group, string? search, bool? favorites, long? from, int? hours, int? limit, int? offset) =>
+        app.MapGet("/api/live/guide", (LiveTvService live, MediaServer.Api.Recording.LiveListService lists, TimeProvider time, string? group, string? search, bool? favorites, long? from, int? hours, int? limit, int? offset, long? list) =>
         {
+            if (list is { } l && !lists.Owns(l)) return Results.NotFound();
             var now = time.GetUtcNow().ToUnixTimeSeconds();
             var start = from is { } f && f > 0 ? f : now - now % 1800;
-            return Results.Ok(live.Guide(group, search, favorites == true, start, hours ?? 6, limit ?? 40, offset ?? 0));
+            return Results.Ok(live.Guide(group, search, favorites == true, start, hours ?? 6, limit ?? 40, offset ?? 0, list));
         });
 
         app.MapGet("/api/live/channels/{id:long}", (long id, LiveTvService live) => live.Channel(id) is { } c ? Results.Ok(c) : Results.NotFound());

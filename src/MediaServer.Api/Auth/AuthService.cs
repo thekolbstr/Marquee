@@ -4,12 +4,14 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.RegularExpressions;
 using MediaServer.Api.Data;
+using MediaServer.Api.Security;
 
 namespace MediaServer.Api.Auth;
 
 /// <summary>The signed-in person. <c>Username</c> is what they sign in with; <c>Name</c> is what the interface calls them.</summary>
-public sealed record AuthUser(long Id, string Username, string? DisplayName = null)
+public sealed record AuthUser(long Id, string Username, string? DisplayName = null, string Role = "admin")
 {
+    public bool IsAdmin => Role == "admin";
     public string Name => string.IsNullOrWhiteSpace(DisplayName) ? Username : DisplayName;
 }
 
@@ -47,7 +49,7 @@ public static class PasswordHasher
 }
 
 /// <summary>Accounts, sign-in, sessions and brute-force protection. Cookie values are random and stored only as a SHA-256 hash.</summary>
-public sealed partial class AuthService(Database db, IConfiguration config, TimeProvider time)
+public sealed partial class AuthService(Database db, IConfiguration config, TimeProvider time, SecretBox? box = null)
 {
     public const string CookieName = "ms_session";
     /// <summary>How long a "keep me signed in" session lasts (Auth:SessionDays, default 30).</summary>
@@ -107,6 +109,135 @@ public sealed partial class AuthService(Database db, IConfiguration config, Time
         return new AuthUser(id, username!, display);
     }
 
+    // ---- two-factor sign-in (TOTP + one-time recovery codes)
+    private readonly ConcurrentDictionary<string, byte> _unused = new();
+
+    public bool HasTwoFactor(long userId)
+    {
+        using var c = db.Open();
+        return Database.Scalar(c, $"SELECT 1 FROM users WHERE id={userId.ToString(CultureInfo.InvariantCulture)} AND totp_enabled=1") is not null;
+    }
+
+    public (bool Enabled, int RecoveryCodesLeft) TwoFactorStatus(long userId)
+    {
+        using var c = db.Open();
+        var rows = Database.Query(c, "SELECT totp_enabled, recovery_codes FROM users WHERE id=@i", r => (r.GetInt32(0) == 1, r.IsDBNull(1) ? null : r.GetString(1)), ("@i", userId));
+        if (rows.Count == 0 || !rows[0].Item1) return (false, 0);
+        return (true, CodeHashes(rows[0].Item2).Count);
+    }
+
+    /// <summary>Starts enrolment: a fresh secret (not active until a code from the app proves it was set up).</summary>
+    public (string Secret, string Uri) BeginTwoFactor(long userId, string username)
+    {
+        if (HasTwoFactor(userId)) throw new AuthException("Two-factor sign-in is already on.", 409);
+        var secret = Totp.ToBase32(Totp.NewSecret());
+        using var c = db.Open();
+        Database.Execute(c, null, "UPDATE users SET totp_secret=@s, totp_enabled=0, totp_last_step=NULL WHERE id=@i", ("@s", Seal(secret, userId)), ("@i", userId));
+        return (secret, Totp.Uri(ServerName, username, secret));
+    }
+
+    /// <returns>The recovery codes, shown once.</returns>
+    public IReadOnlyList<string> EnableTwoFactor(long userId, string? code)
+    {
+        using var c = db.Open();
+        var rows = Database.Query(c, "SELECT totp_secret, totp_enabled FROM users WHERE id=@i", r => (r.IsDBNull(0) ? null : r.GetString(0), r.GetInt32(1)), ("@i", userId));
+        if (rows.Count == 0 || rows[0].Item1 is null || rows[0].Item2 == 1) throw new AuthException("Start two-factor setup first.", 409);
+        var secret = Open(rows[0].Item1!, userId) ?? throw new AuthException("Start two-factor setup again.", 409);
+        if (!Totp.Verify(Totp.FromBase32(secret), code, time.GetUtcNow(), null, out var step)) throw new AuthException("That code isn't right. Check the app and try again.", 400);
+        var codes = NewRecoveryCodes();
+        Database.Execute(c, null, "UPDATE users SET totp_enabled=1, totp_last_step=@s, recovery_codes=@r WHERE id=@i",
+            ("@s", step), ("@r", System.Text.Json.JsonSerializer.Serialize(codes.Select(HashCode).ToList())), ("@i", userId));
+        return codes;
+    }
+
+    public void DisableTwoFactor(long userId, string? password, string? code)
+    {
+        using var c = db.Open();
+        var rows = Database.Query(c, "SELECT password_hash FROM users WHERE id=@i", r => r.GetString(0), ("@i", userId));
+        if (rows.Count == 0 || !PasswordHasher.Verify(password ?? "", rows[0])) throw new AuthException("Your password isn't right.", 403);
+        if (!VerifySecondFactor(userId, code)) throw new AuthException("That code isn't right.", 403);
+        Database.Execute(c, null, "UPDATE users SET totp_enabled=0, totp_secret=NULL, totp_last_step=NULL, recovery_codes=NULL WHERE id=@i", ("@i", userId));
+    }
+
+    public IReadOnlyList<string> RegenerateRecoveryCodes(long userId, string? password)
+    {
+        using var c = db.Open();
+        var rows = Database.Query(c, "SELECT password_hash FROM users WHERE id=@i AND totp_enabled=1", r => r.GetString(0), ("@i", userId));
+        if (rows.Count == 0) throw new AuthException("Two-factor sign-in is off.", 409);
+        if (!PasswordHasher.Verify(password ?? "", rows[0])) throw new AuthException("Your password isn't right.", 403);
+        var codes = NewRecoveryCodes();
+        Database.Execute(c, null, "UPDATE users SET recovery_codes=@r WHERE id=@i", ("@r", System.Text.Json.JsonSerializer.Serialize(codes.Select(HashCode).ToList())), ("@i", userId));
+        return codes;
+    }
+
+    /// <summary>A code from the authenticator app (each works once) or an unused recovery code (consumed on use).</summary>
+    public bool VerifySecondFactor(long userId, string? code)
+    {
+        if (string.IsNullOrWhiteSpace(code) || code.Length > 40) return false;
+        using var c = db.Open();
+        var rows = Database.Query(c, "SELECT totp_secret, totp_last_step, recovery_codes FROM users WHERE id=@i AND totp_enabled=1",
+            r => (r.IsDBNull(0) ? null : r.GetString(0), r.IsDBNull(1) ? (long?)null : r.GetInt64(1), r.IsDBNull(2) ? null : r.GetString(2)), ("@i", userId));
+        if (rows.Count == 0) return false;
+        var (sealedSecret, last, recovery) = rows[0];
+        if (sealedSecret is not null && Open(sealedSecret, userId) is { } secret && Totp.Verify(Totp.FromBase32(secret), code, time.GetUtcNow(), last, out var step))
+        {
+            // only move forward, atomically: two requests with the same code can't both succeed
+            return Database.Execute(c, null, "UPDATE users SET totp_last_step=@s WHERE id=@i AND (totp_last_step IS NULL OR totp_last_step < @s)", ("@s", step), ("@i", userId)) > 0;
+        }
+        var hashes = CodeHashes(recovery);
+        var h = HashCode(code);
+        if (!hashes.Contains(h)) return false;
+        hashes.Remove(h);
+        return Database.Execute(c, null, "UPDATE users SET recovery_codes=@r WHERE id=@i AND recovery_codes=@old", ("@r", System.Text.Json.JsonSerializer.Serialize(hashes)), ("@i", userId), ("@old", recovery)) > 0;
+    }
+
+    /// <summary>Proof that the password step was passed: lets the second step finish a sign-in without the password again. Valid for five minutes.</summary>
+    public string MakeTicket(long userId)
+    {
+        var exp = time.GetUtcNow().AddMinutes(5).ToUnixTimeSeconds();
+        return $"{userId}.{exp}.{SignTicket(userId, exp)}";
+    }
+
+    public long? ReadTicket(string? ticket)
+    {
+        var p = (ticket ?? "").Split('.');
+        if (p.Length != 3 || !long.TryParse(p[0], NumberStyles.None, CultureInfo.InvariantCulture, out var uid) || !long.TryParse(p[1], NumberStyles.None, CultureInfo.InvariantCulture, out var exp)) return null;
+        if (exp < time.GetUtcNow().ToUnixTimeSeconds() || !FixedEquals(SignTicket(uid, exp), p[2])) return null;
+        return uid;
+    }
+
+    public AuthUser? GetUser(long id)
+    {
+        using var c = db.Open();
+        var rows = Database.Query(c, "SELECT id, username, display_name, role FROM users WHERE id=@i", r => new AuthUser(r.GetInt64(0), r.GetString(1), r.IsDBNull(2) ? null : r.GetString(2), r.GetString(3)), ("@i", id));
+        return rows.Count == 0 ? null : rows[0];
+    }
+
+    private string SignTicket(long userId, long exp) => Convert.ToBase64String(HMACSHA256.HashData(StreamKey(), Encoding.UTF8.GetBytes($"2fa:{userId}:{exp}"))).Replace('+', '-').Replace('/', '_').TrimEnd('=');
+    private string Seal(string v, long userId) => box?.Protect(v, $"totp:{userId}") ?? v;
+    private string? Open(string stored, long userId) => box is null ? stored : box.TryUnprotect(stored, $"totp:{userId}");
+    private static string HashCode(string code) => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(code.Trim().Replace("-", "").ToLowerInvariant())));
+    private static List<string> CodeHashes(string? json) { try { return json is null ? [] : System.Text.Json.JsonSerializer.Deserialize<List<string>>(json) ?? []; } catch (System.Text.Json.JsonException) { return []; } }
+    private static List<string> NewRecoveryCodes() => Enumerable.Range(0, 8).Select(_ => { var b = RandomNumberGenerator.GetBytes(5); var h = Convert.ToHexString(b).ToLowerInvariant(); return $"{h[..5]}-{h[5..]}"; }).ToList();
+
+    /// <summary>Throttle bookkeeping shared by both sign-in steps.</summary>
+    public void EnsureNotBlocked(string clientKey)
+    {
+        var now = time.GetUtcNow();
+        if (_throttle.TryGetValue(clientKey, out var t) && t.Until > now)
+            throw new AuthException("Too many attempts. Wait a bit and try again.", 429) { RetryAfterSeconds = (int)Math.Ceiling((t.Until - now).TotalSeconds) };
+    }
+
+    public void RegisterFailure(string clientKey)
+    {
+        var now = time.GetUtcNow();
+        var fails = (_throttle.TryGetValue(clientKey, out var prev) ? prev.Fails : 0) + 1;
+        var wait = fails < 5 ? TimeSpan.Zero : TimeSpan.FromSeconds(Math.Min(900, 15 * Math.Pow(2, fails - 5)));
+        _throttle[clientKey] = (fails, now + wait);
+    }
+
+    public void RegisterSuccess(string clientKey) => _throttle.TryRemove(clientKey, out _);
+
     /// <summary>Checks the credentials. Unknown names cost the same time as wrong passwords, and repeated failures from one address slow down.</summary>
     public AuthUser Login(string? username, string? password, string clientKey)
     {
@@ -114,11 +245,11 @@ public sealed partial class AuthService(Database db, IConfiguration config, Time
         if (_throttle.TryGetValue(clientKey, out var t) && t.Until > now)
             throw new AuthException("Too many attempts. Wait a bit and try again.", 429) { RetryAfterSeconds = (int)Math.Ceiling((t.Until - now).TotalSeconds) };
 
-        (long Id, string Name, string Hash, string? Display)? row = null;
+        (long Id, string Name, string Hash, string? Display, string Role)? row = null;
         if (!string.IsNullOrEmpty(username) && username.Length <= 64)
         {
             using var c = db.Open();
-            var rows = Database.Query(c, "SELECT id, username, password_hash, display_name FROM users WHERE username=@u", r => (r.GetInt64(0), r.GetString(1), r.GetString(2), r.IsDBNull(3) ? null : r.GetString(3)), ("@u", username));
+            var rows = Database.Query(c, "SELECT id, username, password_hash, display_name, role FROM users WHERE username=@u", r => (r.GetInt64(0), r.GetString(1), r.GetString(2), r.IsDBNull(3) ? null : r.GetString(3), r.GetString(4)), ("@u", username));
             if (rows.Count == 1) row = rows[0];
         }
         var ok = PasswordHasher.Verify(password ?? "", row?.Hash ?? DummyHash.Value);
@@ -131,7 +262,7 @@ public sealed partial class AuthService(Database db, IConfiguration config, Time
             throw new AuthException("Wrong username or password.", 401);
         }
         _throttle.TryRemove(clientKey, out _);
-        return new AuthUser(row.Value.Id, row.Value.Name, row.Value.Display);
+        return new AuthUser(row.Value.Id, row.Value.Name, row.Value.Display, row.Value.Role);
     }
 
     private static readonly Lazy<string> DummyHash = new(() => PasswordHasher.Hash("not-a-real-password", 100_000));
@@ -155,10 +286,10 @@ public sealed partial class AuthService(Database db, IConfiguration config, Time
         var now = time.GetUtcNow();
         using var c = db.Open();
         var rows = Database.Query(c, """
-            SELECT u.id, u.username, s.expires_at, s.last_seen, s.created_at, u.display_name FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.token_hash=@h
-            """, r => (r.GetInt64(0), r.GetString(1), r.GetString(2), r.GetString(3), r.GetString(4), r.IsDBNull(5) ? null : r.GetString(5)), ("@h", Hash(token)));
+            SELECT u.id, u.username, s.expires_at, s.last_seen, s.created_at, u.display_name, u.role FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.token_hash=@h
+            """, r => (r.GetInt64(0), r.GetString(1), r.GetString(2), r.GetString(3), r.GetString(4), r.IsDBNull(5) ? null : r.GetString(5), r.GetString(6)), ("@h", Hash(token)));
         if (rows.Count == 0) return null;
-        var (id, name, expires, seen, created, display) = rows[0];
+        var (id, name, expires, seen, created, display, role) = rows[0];
         var exp = DateTimeOffset.Parse(expires, CultureInfo.InvariantCulture);
         if (exp <= now) { Database.Execute(c, null, "DELETE FROM sessions WHERE token_hash=@h", ("@h", Hash(token))); return null; }
         // Slide the expiry at most once an hour (not on every request).
@@ -167,7 +298,7 @@ public sealed partial class AuthService(Database db, IConfiguration config, Time
             var length = exp - DateTimeOffset.Parse(created, CultureInfo.InvariantCulture) > IdleSessionLength ? SessionLength : IdleSessionLength;
             Database.Execute(c, null, "UPDATE sessions SET last_seen=@n, expires_at=@e WHERE token_hash=@h", ("@n", Iso(now)), ("@e", Iso(now + length)), ("@h", Hash(token)));
         }
-        return new AuthUser(id, name, display);
+        return new AuthUser(id, name, display, role);
     }
 
     public void Revoke(string? token)
@@ -201,10 +332,17 @@ public sealed partial class AuthService(Database db, IConfiguration config, Time
     {
         if (_streamKey is not null) return _streamKey;
         using var c = db.Open();
+        var fresh = Convert.ToBase64String(RandomNumberGenerator.GetBytes(32));
         Database.Execute(c, null, "INSERT OR IGNORE INTO settings(key,value,updated_at) VALUES('auth.stream_key',@v,@t)",
-            ("@v", Convert.ToBase64String(RandomNumberGenerator.GetBytes(32))), ("@t", Now()));
+            ("@v", box?.Protect(fresh, "auth.stream_key") ?? fresh), ("@t", Now()));
         var v = Convert.ToString(Database.Scalar(c, "SELECT value FROM settings WHERE key='auth.stream_key'"), CultureInfo.InvariantCulture)!;
-        return _streamKey = Convert.FromBase64String(v);
+        var plain = box is null ? v : box.TryUnprotect(v, "auth.stream_key");
+        if (plain is null)   // unreadable (the key was replaced): make a new one, which only invalidates links already handed out
+        {
+            plain = fresh;
+            Database.Execute(c, null, "UPDATE settings SET value=@v WHERE key='auth.stream_key'", ("@v", box!.Protect(plain, "auth.stream_key")));
+        }
+        return _streamKey = Convert.FromBase64String(plain);
     }
 
     public string StreamToken(long mediaId, TimeSpan? lifetime = null)

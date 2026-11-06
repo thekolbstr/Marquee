@@ -18,7 +18,7 @@ public enum HlsSegments { MpegTs, Fmp4 }
 public sealed record HlsPlan(int VideoStream, int? AudioStream, VideoMode Video, AudioMode Audio,
     HlsSegments Segments = HlsSegments.MpegTs, string? VideoTag = null, string Reason = "",
     bool Vod = false, double DurationSeconds = 0, int? MaxWidth = null, int? VideoKbps = null, int AudioKbps = 192,
-    bool Live = false, bool Deinterlace = false)
+    bool Live = false, bool Deinterlace = false, int? BurnSubtitle = null)
 {
     /// <summary>"remux" when the video is untouched (cheap), otherwise "transcode".</summary>
     public string Mode => Video == VideoMode.Copy ? "remux" : "transcode";
@@ -28,18 +28,21 @@ public sealed record HlsPlan(int VideoStream, int? AudioStream, VideoMode Video,
 public static class HlsPlanner
 {
     public static HlsPlan? Decide(MediaInfo info, HlsOptions opts, ClientCaps? caps = null, string? fileExtension = null,
-        bool forceTranscode = false, string? quality = null)
+        bool forceTranscode = false, string? quality = null, int? audioIndex = null, int? burnSubtitle = null)
     {
         if (info.Video.Count == 0) return null;
         var v = info.Video[0];
         var d = PlaybackPolicy.Decide(info, fileExtension, caps ?? ClientCaps.Baseline);
+        // Picture-based subtitles (PGS, DVD) can't be sent to a browser as text: they're drawn onto the video, which means re-encoding it.
+        var burn = burnSubtitle is { } bs && info.Subtitles.Any(x => x.Index == bs) ? bs : (int?)null;
 
         // A chosen quality means "re-encode to this size/bitrate". It's ignored for sources smaller than the choice.
         var q = HlsQuality.Find(quality) is { } found && found.AppliesTo(v.Width) ? found : null;
 
-        var copy = q is null && !forceTranscode && d.VideoSupported && d.VideoKey is "h264" or "hevc" or "hevc10";
+        var copy = q is null && !forceTranscode && burn is null && d.VideoSupported && d.VideoKey is "h264" or "hevc" or "hevc10";
 
-        var a = info.Audio.FirstOrDefault(x => x.IsDefault) ?? info.Audio.FirstOrDefault();
+        // A chosen audio track (another language, a commentary) wins over the file's default one.
+        var a = (audioIndex is { } ai ? info.Audio.FirstOrDefault(x => x.Index == ai) : null) ?? info.Audio.FirstOrDefault(x => x.IsDefault) ?? info.Audio.FirstOrDefault();
         var vod = !copy && info.DurationSeconds is > 0;
         // Segmented transcodes re-encode audio too: copied AAC can't be cut at exact segment boundaries after a seek.
         var audio = a is null ? AudioMode.None
@@ -49,12 +52,13 @@ public static class HlsPlanner
         // HEVC only travels in fragmented MP4; H.264 keeps the MPEG-TS path that is proven everywhere.
         var hevc = copy && d.VideoKey is "hevc" or "hevc10";
         var reason = copy ? d.Reason.StartsWith("Direct stream") ? d.Reason : "Direct stream, video untouched"
+            : burn is not null ? "Transcoding: subtitles are drawn onto the picture"
             : q is not null ? $"Transcoding to {q.Name} (your choice)"
             : forceTranscode ? "Transcoding: direct stream failed in this browser" : d.Reason;
 
         return new HlsPlan(v.Index, a?.Index, copy ? VideoMode.Copy : VideoMode.Encode, audio,
             hevc ? HlsSegments.Fmp4 : HlsSegments.MpegTs, hevc ? "hvc1" : null, reason,
-            vod, vod ? info.DurationSeconds!.Value : 0, q?.MaxWidth, q?.VideoKbps, q?.AudioKbps ?? 192);
+            vod, vod ? info.DurationSeconds!.Value : 0, q?.MaxWidth, q?.VideoKbps, q?.AudioKbps ?? 192, BurnSubtitle: burn);
     }
 
     /// <summary>

@@ -55,6 +55,31 @@ then a short wizard asks for your media folders and (optionally) a TMDB token. A
 modified, and an offline drive or share is skipped rather than emptying the library). Overlapping folders are refused, as are system
 locations and the server's own data. `Library__AllowedRoots=/media;/mnt` limits where folders may be added.
 
+## More features
+
+- **People:** several accounts, each with their own watch history, My List, channel lists and recordings. Administrators (Settings → People) add and remove
+  people and reset passwords; ordinary people can't change server settings. Sign-in is two-step if you turn it on (Settings → Account): an authenticator app
+  (TOTP) plus one-time recovery codes.
+- **My List** and **Watched…** (mark a season or a whole show watched/unwatched) on every show page.
+- **Skip intro / Skip credits** when the file has chapters named like "Opening" or "Credits"; **seek-bar previews** (made once per title in the background);
+  **audio track** and **subtitle language** menus, **picture subtitles** (PGS/DVD) can be burned in (this re-encodes the video); **playback speed**.
+- **Cast:** AirPlay in Safari; Chromecast in Chrome (needs the server's network address and HTTPS or localhost; the Google Cast library is loaded only when you press Cast).
+- **Live TV recording:** record from the guide (●) or while watching; recordings are plain files in `Recordings__Directory` (default `<data folder>/recordings`)
+  and appear in the library like any title. Settings → Live TV & recording: how many at once, padding before/after, auto-delete. **Channel lists:** your own named groups.
+- **Install it as an app** (phone/desktop) from the browser menu; works over HTTPS or localhost.
+- **Light, black and automatic themes.**
+
+## Security notes
+
+- **Secrets are encrypted at rest** (AES-256-GCM): the TMDB token, the Live TV playlist/guide URLs, channel stream URLs and each person's two-factor secret. The key is
+  `Security__SecretKey` (32 random bytes, base64: `openssl rand -base64 32`, e.g. from a Kubernetes secret) or, if you don't set it, a `secret.key` file created next to the
+  database. Keep the key out of backups: the built-in backup (Settings → Maintenance) is the database only. Older installs are upgraded automatically on first start.
+  Lose the key and the saved secrets are treated as "not set" (you enter them again); nothing else is affected.
+- **HTTPS:** terminate TLS in your reverse proxy (recommended), or set `Https__Enabled=true` for a built-in HTTPS port (`Https__Port`, default 8443) with a self-signed
+  certificate kept next to the database (`Https__Hostnames` adds names; the certificate can be downloaded from Settings → Network & security to trust it on a device),
+  or your own with `Https__CertificatePath` / `Https__CertificatePassword`. `Https__RedirectHttp` and `Https__Hsts` are optional.
+- Passwords are PBKDF2-SHA256 hashes; sessions are stored only as hashes; sign-in attempts are throttled per address.
+
 ## Settings
 
 Gear icon → Settings. **This device** settings live in the browser; **Server** settings live in the database and apply to everyone, immediately (no restart).

@@ -71,6 +71,15 @@ public sealed class AuthFixture : IDisposable
         return c;
     }
 
+    public async Task<HttpClient> SignedInAgain(string user = "alex", string password = "a-long-password-123")
+    {
+        var c = Client();
+        var res = await c.PostAsJsonAsync("/api/auth/login", new { username = user, password });
+        var j = await res.Content.ReadFromJsonAsync<JsonElement>();
+        if (j.TryGetProperty("twoFactorRequired", out _)) throw new InvalidOperationException("This account needs a second factor");
+        return c;
+    }
+
     public void Dispose() { Factory.Dispose(); Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools(); try { Directory.Delete(Dir, true); } catch (IOException) { } }
 }
 

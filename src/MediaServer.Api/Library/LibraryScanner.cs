@@ -43,7 +43,12 @@ public sealed class LibraryScanner(Database db, IMediaProbe probe, IConfiguratio
         var unavailable = new List<string>();
         foreach (var r in roots)
         {
-            if (r.FolderId is not null && !Directory.Exists(r.Path)) { unavailable.Add(r.Prefix); log.LogWarning("Library folder {Folder} is unavailable; skipping it", r.Path); continue; }
+            if (r.FolderId is not null && !Directory.Exists(r.Path))
+            {
+                unavailable.Add(r.Prefix);
+                if (r.Prefix != LibraryFolders.RecordingsPrefix) log.LogWarning("Library folder {Folder} is unavailable; skipping it", r.Path);   // no recordings yet is normal
+                continue;
+            }
             foreach (var (rel, stamp) in Enumerate(r.Path, ct)) found[r.Prefix + rel] = stamp;
         }
 
@@ -146,7 +151,7 @@ public sealed class LibraryScanner(Database db, IMediaProbe probe, IConfiguratio
         }
         foreach (var (id, path) in stale)
         {
-            var p = FilenameParser.Parse(LibraryFolders.StripPrefix(path));
+            var p = path.StartsWith(LibraryFolders.RecordingsPrefix, StringComparison.Ordinal) ? RecordingName(path) : FilenameParser.Parse(LibraryFolders.StripPrefix(path));
             object N(object? v) => v ?? DBNull.Value;
             Run(c, tx, """
                 UPDATE media_files SET parser_version=@v, kind=@k, title=@t, year=@y, season=@s, episode=@e,
@@ -154,6 +159,15 @@ public sealed class LibraryScanner(Database db, IMediaProbe probe, IConfiguratio
                 """, ("@v", FilenameParser.Version), ("@k", p.Kind.ToString()), ("@t", p.Title), ("@y", N(p.Year)), ("@s", N(p.Season)),
                 ("@e", N(p.Episode)), ("@ee", N(p.EpisodeEnd)), ("@et", N(p.EpisodeTitle)), ("@ad", N(p.AirDate)), ("@id", id));
         }
+    }
+
+    /// <summary>"News at Six [2026-11-06 1800].ts" is a recording called "News at Six": never mistaken for a movie or an episode.</summary>
+    internal static ParsedName RecordingName(string stored)
+    {
+        var stem = Path.GetFileNameWithoutExtension(LibraryFolders.StripPrefix(stored));
+        var cut = stem.LastIndexOf(" [", StringComparison.Ordinal);
+        var title = (cut > 0 ? stem[..cut] : stem).Trim();
+        return new ParsedName(MediaKind.Recording, title.Length == 0 ? "Recording" : title, null, null, null, null, null, null, null, null);
     }
 
     private static string Absolute(IReadOnlyList<LibraryRoot> roots, string stored)

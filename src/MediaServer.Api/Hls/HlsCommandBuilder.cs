@@ -37,9 +37,12 @@ public static class HlsCommandBuilder
                         "-reconnect_delay_max", "5", "-fflags", "+genpts+discardcorrupt", "-analyzeduration", "3000000", "-probesize", "3000000"]);
         a.AddRange(["-i", inputPath]);
 
-        a.AddRange(["-map", $"0:{plan.VideoStream}"]);
+        // Burning in subtitles: the picture and the chosen subtitle stream go through one filter graph; the result is what gets encoded.
+        var burn = plan.Video == VideoMode.Encode && plan.BurnSubtitle is not null;
+        a.AddRange(["-map", burn ? "[v]" : $"0:{plan.VideoStream}"]);
         if (plan.AudioStream is { } audio) a.AddRange(["-map", $"0:{audio}"]);
-        a.AddRange(["-sn", "-dn", "-map_metadata", "-1", "-max_muxing_queue_size", "1024"]);
+        a.AddRange(burn ? ["-dn"] : ["-sn", "-dn"]);
+        a.AddRange(["-map_metadata", "-1", "-max_muxing_queue_size", "1024"]);
 
         if (plan.Video == VideoMode.Copy)
         {
@@ -52,7 +55,9 @@ public static class HlsCommandBuilder
             var keyframes = $"expr:gte(t,n_forced*{seg})";
             // Downscale only, never upscale. The escaped comma is ffmpeg filtergraph syntax.
             var scale = plan.MaxWidth is { } w ? $"scale=min({w}\\,iw):-2" : $"scale=-2:min({o.MaxHeight}\\,ih)";
-            a.AddRange(["-vf", plan.Deinterlace ? "yadif=0:-1:1," + scale : scale]);   // yadif: only frames flagged interlaced are touched
+            var chain = plan.Deinterlace ? "yadif=0:-1:1," + scale : scale;          // yadif: only frames flagged interlaced are touched
+            if (burn) a.AddRange(["-filter_complex", $"[0:{plan.VideoStream}][0:{plan.BurnSubtitle}]overlay=eof_action=pass:repeatlast=0,{chain}[v]"]);
+            else a.AddRange(["-vf", chain]);
             var rate = plan.VideoKbps is { } kbps ? new[] { "-maxrate", $"{kbps}k", "-bufsize", $"{kbps * 2}k" } : [];
             // B-frames delay presentation vs decode timestamps by a run-dependent amount, which would misalign runs started by seeks.
             string[] noB = plan.Vod ? ["-bf", "0"] : [];

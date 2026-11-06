@@ -5,6 +5,10 @@ namespace MediaServer.Api.Endpoints;
 
 public sealed record SetupBody(string? Username, string? Password, string? SetupCode, string? DisplayName = null);
 public sealed record ProfileBody(string? DisplayName);
+public sealed record TwoFactorLoginBody(string? Ticket, string? Code, bool? Remember);
+public sealed record CodeBody(string? Code);
+public sealed record DisableTwoFactorBody(string? Password, string? Code);
+public sealed record PasswordOnlyBody(string? Password);
 public sealed record LoginBody(string? Username, string? Password, bool? Remember);
 public sealed record PasswordBody(string? Current, string? New);
 
@@ -18,9 +22,9 @@ public static class AuthEndpoints
         app.MapGet("/api/auth/state", (AuthService auth, HttpContext ctx) =>
         {
             ctx.Response.Headers.CacheControl = "no-store";
-            if (!auth.Enabled) return Results.Ok(new { authEnabled = false, setupRequired = false, authenticated = true, user = (string?)null, setupCodeRequired = false, serverName = auth.ServerName, name = (string?)null });
+            if (!auth.Enabled) return Results.Ok(new { authEnabled = false, setupRequired = false, authenticated = true, user = (string?)null, setupCodeRequired = false, serverName = auth.ServerName, name = (string?)null, role = "admin" });
             var user = auth.Validate(ctx.Request.Cookies[AuthService.CookieName]);
-            return Results.Ok(new { authEnabled = true, setupRequired = !auth.HasUsers(), authenticated = user is not null, user = user?.Username, name = user?.Name, displayName = user?.DisplayName, setupCodeRequired = auth.SetupCodeRequired, serverName = auth.ServerName });
+            return Results.Ok(new { authEnabled = true, setupRequired = !auth.HasUsers(), authenticated = user is not null, user = user?.Username, name = user?.Name, displayName = user?.DisplayName, role = user?.Role, setupCodeRequired = auth.SetupCodeRequired, serverName = auth.ServerName });
         });
 
         app.MapPost("/api/auth/setup", (SetupBody body, AuthService auth, HttpContext ctx) =>
@@ -41,10 +45,64 @@ public static class AuthEndpoints
             try
             {
                 var user = auth.Login(body.Username, body.Password, ClientKey(ctx));
+                // Right password, but this account also needs a code from its authenticator app: nothing is signed in yet.
+                if (auth.HasTwoFactor(user.Id)) return Results.Ok(new { twoFactorRequired = true, ticket = auth.MakeTicket(user.Id) });
                 SignIn(ctx, auth, user, body.Remember ?? false);
                 return Results.Ok(new { user = user.Username, name = user.Name });
             }
             catch (AuthException ex) { return Fail(ex, ctx); }
+        });
+
+        app.MapPost("/api/auth/login/2fa", (TwoFactorLoginBody body, AuthService auth, HttpContext ctx) =>
+        {
+            if (!auth.Enabled) return Results.NotFound();
+            try
+            {
+                var key = ClientKey(ctx);
+                auth.EnsureNotBlocked(key);
+                if (auth.ReadTicket(body.Ticket) is not { } uid || auth.GetUser(uid) is not { } user) return Results.Json(new { error = "That sign-in expired. Start again." }, statusCode: 401);
+                if (!auth.VerifySecondFactor(uid, body.Code)) { auth.RegisterFailure(key); return Results.Json(new { error = "That code isn't right." }, statusCode: 401); }
+                auth.RegisterSuccess(key);
+                SignIn(ctx, auth, user, body.Remember ?? false);
+                return Results.Ok(new { user = user.Username, name = user.Name });
+            }
+            catch (AuthException ex) { return Fail(ex, ctx); }
+        });
+
+        // ---- managing your own second factor (signed in)
+        app.MapGet("/api/auth/2fa", (AuthService auth, HttpContext ctx) =>
+        {
+            if (ctx.Items[UserItem] is not AuthUser u) return Results.Unauthorized();
+            var (enabled, left) = auth.TwoFactorStatus(u.Id);
+            return Results.Ok(new { enabled, recoveryCodesLeft = left });
+        });
+
+        app.MapPost("/api/auth/2fa/begin", (AuthService auth, HttpContext ctx) =>
+        {
+            if (ctx.Items[UserItem] is not AuthUser u) return Results.Unauthorized();
+            try { var (secret, uri) = auth.BeginTwoFactor(u.Id, u.Username); return Results.Ok(new { secret, uri }); }
+            catch (AuthException ex) { return Fail(ex); }
+        });
+
+        app.MapPost("/api/auth/2fa/enable", (CodeBody body, AuthService auth, HttpContext ctx) =>
+        {
+            if (ctx.Items[UserItem] is not AuthUser u) return Results.Unauthorized();
+            try { return Results.Ok(new { recoveryCodes = auth.EnableTwoFactor(u.Id, body.Code) }); }
+            catch (AuthException ex) { return Fail(ex); }
+        });
+
+        app.MapPost("/api/auth/2fa/disable", (DisableTwoFactorBody body, AuthService auth, HttpContext ctx) =>
+        {
+            if (ctx.Items[UserItem] is not AuthUser u) return Results.Unauthorized();
+            try { auth.DisableTwoFactor(u.Id, body.Password, body.Code); return Results.NoContent(); }
+            catch (AuthException ex) { return Fail(ex); }
+        });
+
+        app.MapPost("/api/auth/2fa/recovery-codes", (PasswordOnlyBody body, AuthService auth, HttpContext ctx) =>
+        {
+            if (ctx.Items[UserItem] is not AuthUser u) return Results.Unauthorized();
+            try { return Results.Ok(new { recoveryCodes = auth.RegenerateRecoveryCodes(u.Id, body.Password) }); }
+            catch (AuthException ex) { return Fail(ex); }
         });
 
         app.MapPost("/api/auth/logout", (AuthService auth, HttpContext ctx) =>
@@ -124,6 +182,22 @@ public sealed class AuthMiddleware(RequestDelegate next)
         var guarded = path.StartsWithSegments("/api") || path.StartsWithSegments("/stream");
         if (!guarded) { await next(ctx); return; }
 
+        // Media links (HLS sessions, signed direct-play links) are capability URLs: whoever holds the link may play it, from any page. A cast
+        // receiver (Chromecast) fetches them from its own origin, which needs these headers. No cookies are involved, so nothing else is exposed.
+        var mediaLink = System.Text.RegularExpressions.Regex.IsMatch(path.Value ?? "", "^/api/hls/[0-9a-f]{32}/") || path.StartsWithSegments("/stream");
+        if (mediaLink)
+        {
+            ctx.Response.Headers.AccessControlAllowOrigin = "*";
+            ctx.Response.Headers.AccessControlExposeHeaders = "Content-Length, Content-Range, Accept-Ranges";
+            if (HttpMethods.IsOptions(ctx.Request.Method))
+            {
+                ctx.Response.Headers.AccessControlAllowMethods = "GET, HEAD, OPTIONS";
+                ctx.Response.Headers.AccessControlAllowHeaders = "Range, Content-Type";
+                ctx.Response.StatusCode = StatusCodes.Status204NoContent;
+                return;
+            }
+        }
+
         // A write from another site's page is never legitimate, whatever cookie the browser would attach.
         if (!HttpMethods.IsGet(ctx.Request.Method) && !HttpMethods.IsHead(ctx.Request.Method) && !HttpMethods.IsOptions(ctx.Request.Method)
             && ctx.Request.Headers.Origin.ToString() is { Length: > 0 } origin && !SameHost(origin, ctx.Request))
@@ -133,7 +207,7 @@ public sealed class AuthMiddleware(RequestDelegate next)
             return;
         }
 
-        if (!auth.Enabled || path.StartsWithSegments("/api/auth", out var rest) && (rest.Value is "/state" or "/setup" or "/login" or "/logout" or "/password"))
+        if (!auth.Enabled || path.StartsWithSegments("/api/auth", out var rest) && (rest.Value is "/state" or "/setup" or "/login" or "/login/2fa" or "/logout" or "/password"))
         {
             if (auth.Enabled) ctx.Items[AuthEndpoints.UserItem] = auth.Validate(ctx.Request.Cookies[AuthService.CookieName]);
             await next(ctx);
@@ -154,7 +228,23 @@ public sealed class AuthMiddleware(RequestDelegate next)
             return;
         }
         ctx.Items[AuthEndpoints.UserItem] = user;
+        if (!user.IsAdmin && IsAdminOnly(ctx.Request))
+        {
+            ctx.Response.StatusCode = StatusCodes.Status403Forbidden;
+            await ctx.Response.WriteAsJsonAsync(new { error = "admin_required" });
+            return;
+        }
         await next(ctx);
+    }
+
+    /// <summary>Everything that configures or inspects the server rather than just using it.</summary>
+    internal static bool IsAdminOnly(HttpRequest req)
+    {
+        var p = req.Path;
+        if (p.StartsWithSegments("/api/settings") || p.StartsWithSegments("/api/maintenance") || p.StartsWithSegments("/api/system") || p.StartsWithSegments("/api/users")
+            || p.StartsWithSegments("/api/fs") || p.StartsWithSegments("/api/library/folders") || p.StartsWithSegments("/api/live/refresh") || p.StartsWithSegments("/api/tmdb/search")) return true;
+        // fixing a wrong TMDB match changes the shared library
+        return (HttpMethods.IsPut(req.Method) || HttpMethods.IsDelete(req.Method)) && System.Text.RegularExpressions.Regex.IsMatch(p.Value ?? "", "^/api/media/\\d+/match$");
     }
 
     private static bool SameHost(string origin, HttpRequest req)

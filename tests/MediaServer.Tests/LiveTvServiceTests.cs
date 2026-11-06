@@ -37,7 +37,7 @@ public static class LiveFixtures
         """;
 
     public static (LiveTvService Svc, StubHandler H, TestDb T, FakeTimeProvider Time) Make(
-        Func<HttpRequestMessage, HttpResponseMessage>? route = null, Dictionary<string, string?>? cfg = null)
+        Func<HttpRequestMessage, HttpResponseMessage>? route = null, Dictionary<string, string?>? cfg = null, MediaServer.Api.Security.SecretBox? box = null)
     {
         var c = new Dictionary<string, string?> { ["LiveTv:M3uUrl"] = "http://src.test/output/m3u" };
         if (cfg is not null) foreach (var (k, v) in cfg) c[k] = v;
@@ -49,7 +49,7 @@ public static class LiveFixtures
             _ => TmdbJson.Status(HttpStatusCode.NotFound),
         }));
         var time = new FakeTimeProvider(Now);
-        return (new LiveTvService(t.Db, new HttpClient(h), t.Config, time, NullLogger<LiveTvService>.Instance), h, t, time);
+        return (new LiveTvService(t.Db, new HttpClient(h), t.Config, time, NullLogger<LiveTvService>.Instance, box), h, t, time);
     }
 }
 

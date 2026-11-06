@@ -3,6 +3,7 @@ using MediaServer.Api.Hls;
 using MediaServer.Api.Library;
 using MediaServer.Api.LiveTv;
 using MediaServer.Api.Metadata;
+using MediaServer.Api.Security;
 
 namespace MediaServer.Api.Endpoints;
 
@@ -34,6 +35,19 @@ public static class SystemEndpoints
                 storageBytes = new { artwork = DirSize(imagesDir), transcode = DirSize(hlsOptions.TempDir) },
             });
         });
+    }
+
+    public static void MapHttpsEndpoints(this WebApplication app)
+    {
+        app.MapGet("/api/system/https", (HttpsStatus s, HttpContext ctx) => Results.Ok(new
+        {
+            enabled = s.Enabled, port = s.Port, selfSigned = s.SelfSigned, thumbprint = s.Cert?.Thumbprint, expires = s.Cert?.NotAfter,
+            requestIsSecure = ctx.Request.IsHttps || string.Equals(ctx.Request.Headers["X-Forwarded-Proto"].ToString().Split(',')[0].Trim(), "https", StringComparison.OrdinalIgnoreCase),
+        }));
+
+        // The public part only (no key), so it needs no sign-in: install it on a device to make its browser trust a self-signed server.
+        app.MapGet("/certificate.cer", (HttpsStatus s) =>
+            s.Cert is null ? Results.NotFound() : Results.File(s.Cert.Export(System.Security.Cryptography.X509Certificates.X509ContentType.Cert), "application/x-x509-ca-cert", "mediaserver.cer"));
     }
 
     /// <summary>Total size of a directory tree (bounded, so a huge cache can't make this slow).</summary>
