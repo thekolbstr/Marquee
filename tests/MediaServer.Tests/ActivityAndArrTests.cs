@@ -172,6 +172,25 @@ public sealed class ArrServiceTests
         Assert.Null(q[0].Poster);
     }
 
+    [Fact] public async Task Queue_CopesWithStatusMessagesThatHaveNoLines()
+    {
+        // Seen in the wild: a message with an empty "messages" list used to crash the whole queue.
+        var arr = Make(r => r.RequestUri!.Host.StartsWith("radarr")
+            ? TmdbJson.Ok("""{"records":[{"title":"x","status":"completed","trackedDownloadState":"importPending","size":10,"sizeleft":0,"statusMessages":[{"title":"x.mkv","messages":[]}],"movie":{"title":"Film","year":2020}},{"title":"y","statusMessages":[],"movie":{"title":"Other"}},{"title":"z","statusMessages":[{"messages":["Not an upgrade"]}]}]}""")
+            : TmdbJson.Ok("""{"records":[]}"""), out _);
+        var q = await arr.QueueAsync(default);
+        Assert.Equal(3, q.Count);
+        Assert.Null(q[0].Problem);
+        Assert.Null(q[1].Problem);
+        Assert.Equal("Not an upgrade", q[2].Problem);
+    }
+
+    [Fact] public async Task Queue_IsEmptyWhenNothingIsDownloading()
+    {
+        var arr = Make(_ => TmdbJson.Ok("""{"page":1,"pageSize":50,"totalRecords":0,"records":[]}"""), out _);
+        Assert.Empty(await arr.QueueAsync(default));
+    }
+
     [Fact] public async Task Upcoming_UsesTheHomeReleaseDate_AndSortsByDate()
     {
         var soon = DateTime.UtcNow.Date.AddDays(3).ToString("yyyy-MM-dd");

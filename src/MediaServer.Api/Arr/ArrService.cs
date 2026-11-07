@@ -95,7 +95,7 @@ public sealed class ArrService(HttpClient http, IConfiguration config)
                 var title = k == ArrKind.Radarr ? Title((string?)r["movie"]?["title"], (int?)r["movie"]?["year"]) : (string?)r["series"]?["title"];
                 var ep = r["episode"];
                 var detail = k == ArrKind.Sonarr && ep is not null ? $"S{(int?)ep["seasonNumber"]}E{(int?)ep["episodeNumber"]} · {(string?)ep["title"]}" : null;
-                var warn = (string?)r["errorMessage"] ?? (r["statusMessages"] is JsonArray { Count: > 0 } sm ? (string?)sm[0]?["messages"]?[0] : null);
+                var warn = (string?)r["errorMessage"] ?? FirstMessage(r["statusMessages"]);
                 var bad = string.Equals((string?)r["trackedDownloadStatus"], "error", StringComparison.OrdinalIgnoreCase) || string.Equals((string?)r["status"], "failed", StringComparison.OrdinalIgnoreCase);
                 items.Add(new ArrQueueItem(Name(k), title ?? (string?)r["title"] ?? "Download", detail, State((string?)r["trackedDownloadState"], (string?)r["status"]),
                     size > 0 ? Math.Round(Math.Clamp(1 - left / size, 0, 1) * 100, 1) : 0, (string?)r["timeleft"], bad || warn is not null ? warn ?? "Something went wrong" : null,
@@ -104,6 +104,10 @@ public sealed class ArrService(HttpClient http, IConfiguration config)
         }
         return items;
     }
+
+    /// <summary>The first line of the first status message, if the app gave any (the lists are often empty).</summary>
+    internal static string? FirstMessage(JsonNode? statusMessages) =>
+        (statusMessages as JsonArray)?.Select(m => (m?["messages"] as JsonArray)?.Select(x => (string?)x).FirstOrDefault(x => !string.IsNullOrWhiteSpace(x))).FirstOrDefault(x => x is not null);
 
     private static string State(string? tracked, string? status) => tracked switch
     {
