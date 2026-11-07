@@ -162,7 +162,7 @@ public sealed class ArrServiceTests
     [Fact] public async Task Queue_MergesBothAppsWithProgress()
     {
         var arr = Make(r => r.RequestUri!.Host.StartsWith("radarr")
-            ? TmdbJson.Ok("""{"records":[{"title":"x.2020.1080p","status":"downloading","trackedDownloadState":"downloading","size":1000,"sizeleft":250,"timeleft":"00:12:00","movie":{"title":"Big Film","year":2020}}]}""")
+            ? TmdbJson.Ok("""{"records":[{"title":"x.2020.1080p","status":"downloading","trackedDownloadState":"downloading","size":1000,"sizeleft":250,"timeleft":"00:12:00","quality":{"quality":{"name":"WEBDL-1080p"}},"indexer":"Geek","downloadClient":"SAB","movie":{"title":"Big Film","year":2020,"overview":"A heist."}}]}""")
             : TmdbJson.Ok("""{"records":[{"title":"s","status":"warning","trackedDownloadStatus":"error","errorMessage":"No files found","size":0,"sizeleft":0,"series":{"title":"A Show"},"episode":{"seasonNumber":2,"episodeNumber":5,"title":"Five"}}]}"""), out var stub);
         var q = await arr.QueueAsync(default);
         Assert.Equal(2, q.Count);
@@ -170,6 +170,7 @@ public sealed class ArrServiceTests
         Assert.Equal(("A Show", "S2E5 · Five", "No files found"), (q[1].Title, q[1].Detail, q[1].Problem));
         Assert.Contains("includeMovie=true", stub.Requests[0].RequestUri!.Query);
         Assert.Null(q[0].Poster);
+        Assert.Equal(("A heist.", "WEBDL-1080p", "Geek", "SAB", 1000.0), (q[0].Overview, q[0].Quality, q[0].Indexer, q[0].Client, q[0].SizeBytes));
     }
 
     [Fact] public async Task Queue_CopesWithStatusMessagesThatHaveNoLines()
@@ -196,12 +197,13 @@ public sealed class ArrServiceTests
         var soon = DateTime.UtcNow.Date.AddDays(3).ToString("yyyy-MM-dd");
         var sooner = DateTime.UtcNow.Date.AddDays(1).ToString("yyyy-MM-dd");
         var arr = Make(r => r.RequestUri!.Host.StartsWith("radarr")
-            ? TmdbJson.Ok("[{\"title\":\"Later Film\",\"year\":2026,\"digitalRelease\":\"" + soon + "T00:00:00Z\",\"inCinemas\":\"2020-01-01T00:00:00Z\",\"hasFile\":false,\"monitored\":true}]")
+            ? TmdbJson.Ok("[{\"title\":\"Later Film\",\"year\":2026,\"overview\":\"Epic.\",\"runtime\":130,\"genres\":[\"Fantasy\",\"Drama\"],\"digitalRelease\":\"" + soon + "T00:00:00Z\",\"inCinemas\":\"2020-01-01T00:00:00Z\",\"hasFile\":false,\"monitored\":true}]")
             : TmdbJson.Ok("[{\"title\":\"Pilot\",\"seasonNumber\":1,\"episodeNumber\":1,\"airDateUtc\":\"" + sooner + "T02:00:00Z\",\"hasFile\":true,\"series\":{\"title\":\"New Show\"}}]"), out _);
         var u = await arr.UpcomingAsync(14, default);
         Assert.Equal(new[] { "New Show", "Later Film (2026)" }, u.Select(x => x.Title));
         Assert.Equal("Digital release", u[1].Detail);
         Assert.True(u[0].HasFile);
+        Assert.Equal(("Epic.", 130, "Fantasy, Drama"), (u[1].Overview, u[1].Runtime, u[1].Genres));
     }
 
     [Fact] public async Task Lookup_MarksTitlesAlreadyInTheLibrary()

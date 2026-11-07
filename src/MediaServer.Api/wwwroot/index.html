@@ -18,18 +18,24 @@
   <header id="top">
     <a class="brand" href="#/" aria-label="Home"><span class="logo" aria-hidden="true"></span><span class="brand-name">MediaServer</span></a>
     <nav id="nav" aria-label="Sections">
-      <a href="#/" data-route="home">Home</a>
-      <a href="#/movies" data-route="movies">Movies</a>
-      <a href="#/shows" data-route="shows">TV Shows</a>
-      <a href="#/mylist" data-route="mylist">My List</a>
-      <a href="#/live" data-route="live" class="hidden">Live TV</a>
-      <a href="#/recordings" data-route="recordings" class="hidden">Recordings</a>
-      <a href="#/downloads" data-route="downloads" class="hidden">Downloads</a>
+      <div class="nav-group"><span class="nav-h">Browse</span>
+        <a href="#/" data-route="home">Home</a>
+        <a href="#/movies" data-route="movies">Movies</a>
+        <a href="#/shows" data-route="shows">TV Shows</a>
+        <a href="#/mylist" data-route="mylist">My List</a>
+      </div>
+      <div class="nav-group"><span class="nav-h">Live</span>
+        <a href="#/live" data-route="live" class="hidden">Live TV</a>
+        <a href="#/recordings" data-route="recordings" class="hidden">Recordings</a>
+      </div>
+      <div class="nav-group"><span class="nav-h">Manage</span>
+        <a href="#/downloads" data-route="downloads" class="hidden">Downloads</a>
+      </div>
     </nav>
     <form id="searchform" role="search" autocomplete="off">
       <input id="search" type="search" placeholder="Search" aria-label="Search movies and shows" enterkeyhint="search">
     </form>
-    <button id="scanbtn" class="icon-btn" type="button" title="Scan library for new files" aria-label="Scan library"></button>
+    <div id="tools"><button id="scanbtn" class="icon-btn" type="button" title="Scan library for new files" aria-label="Scan library"></button></div>
   </header>
   <main id="view"></main>
   <div id="toasts" aria-live="polite"></div>

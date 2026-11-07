@@ -23,6 +23,12 @@ const SVG_NS = 'http://www.w3.org/2000/svg';
 const ICONS = {
   play: { d: 'M8 5.14v13.72a1 1 0 0 0 1.5.86l11-6.86a1 1 0 0 0 0-1.72l-11-6.86A1 1 0 0 0 8 5.14z', fill: true },
   back: { d: 'M15 18l-6-6 6-6' },
+  home: { d: 'M3 11l9-8 9 8v9a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z' },
+  film: { d: 'M4 4h16v16H4zM8 4v16M16 4v16M4 9h4M16 9h4M4 15h4M16 15h4' },
+  tv: { d: 'M3 7h18v12H3zM8 3l4 4 4-4' },
+  live: { d: 'M12 11a1 1 0 1 0 0 2 1 1 0 0 0 0-2zM7.8 7.8a6 6 0 0 0 0 8.4M16.2 7.8a6 6 0 0 1 0 8.4M4.9 4.9a10 10 0 0 0 0 14.2M19.1 4.9a10 10 0 0 1 0 14.2' },
+  rec: { d: 'M12 6a6 6 0 1 0 0 12 6 6 0 0 0 0-12z' },
+  download: { d: 'M12 4v11M7 11l5 5 5-5M5 20h14' },
   search: { d: 'M11 4a7 7 0 1 0 0 14 7 7 0 0 0 0-14zM21 21l-4.6-4.6' },
   left: { d: 'M15 18l-6-6 6-6' },
   right: { d: 'M9 18l6-6-6-6' },
@@ -193,6 +199,10 @@ function detectCaps() {
 const CAPS = detectCaps();
 const capsQuery = () => new URLSearchParams(CAPS).toString();
 const IS_SAFARI = /^((?!chrome|chromium|android|crios|fxios|edg).)*safari/i.test(navigator.userAgent);
+
+// Menu icons: added here so the links in index.html stay plain text.
+const NAV_ICONS = { home: 'home', movies: 'film', shows: 'tv', mylist: 'list', live: 'live', recordings: 'rec', downloads: 'download' };
+document.querySelectorAll('#nav a').forEach((a) => a.prepend(h('span', { class: 'nav-ico' }, icon(NAV_ICONS[a.dataset.route] || 'play'))));
 
 // ================================================================ router
 function parseHash() {
