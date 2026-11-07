@@ -6,7 +6,7 @@ namespace MediaServer.Api.Library;
 /// Runs library scans independently of any HTTP request (a proxy timeout or closed tab must not abort a long first scan),
 /// follows each scan with TMDB enrichment when configured, and remembers the outcome for the UI.
 /// </summary>
-public sealed class ScanCoordinator(LibraryScanner scanner, IServiceScopeFactory scopes, IHostApplicationLifetime life, TimeProvider time, ILogger<ScanCoordinator> log)
+public sealed class ScanCoordinator(LibraryScanner scanner, IServiceScopeFactory scopes, IHostApplicationLifetime life, TimeProvider time, ILogger<ScanCoordinator> log, SkipScanService? skips = null)
 {
     private readonly object _gate = new();
     private Task<ScanResult?>? _running;
@@ -34,6 +34,7 @@ public sealed class ScanCoordinator(LibraryScanner scanner, IServiceScopeFactory
             var result = await scanner.ScanAsync(life.ApplicationStopping);
             if (result is not null) LastResult = result;
             await EnrichAsync();
+            if (result is { } r && (r.Added > 0 || r.Updated > 0 || r.Moved > 0)) skips?.Request();   // new episodes may now have neighbours to compare with
             return result;
         }
         catch (OperationCanceledException) when (life.ApplicationStopping.IsCancellationRequested) { return null; }

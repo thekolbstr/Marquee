@@ -8,14 +8,14 @@ using MediaServer.Api.Processes;
 namespace MediaServer.Api.Library;
 
 public sealed record Chapter(double Start, double End, string Title);
-public sealed record SkipMarker(string Kind, double Start, double End);
+public sealed record SkipMarker(string Kind, double Start, double End, string? Source = null);
 public sealed record ChapterInfo(IReadOnlyList<Chapter> Chapters, IReadOnlyList<SkipMarker> Markers);
 
 /// <summary>
 /// Chapter marks stored in the file, and the "skip intro" / "skip credits" buttons they make possible. Read lazily the first time a title is
 /// played (one quick ffprobe) and cached. Files without chapters simply have no skip buttons.
 /// </summary>
-public sealed partial class ChapterService(Database db, IMediaResolver media, IProcessRunner runner, IConfiguration config, TimeProvider time)
+public sealed partial class ChapterService(Database db, IMediaResolver media, IProcessRunner runner, IConfiguration config, TimeProvider time, SkipDetector? detected = null)
 {
     private readonly string _ffprobe = config["Tools:FfprobePath"] ?? "ffprobe";
 
@@ -32,7 +32,7 @@ public sealed partial class ChapterService(Database db, IMediaResolver media, IP
         using (var c = db.Open())
         {
             var cached = Database.Query(c, "SELECT json FROM media_chapters WHERE media_id=@i AND mtime_ticks=@m", r => r.GetString(0), ("@i", mediaId), ("@m", mtime));
-            if (cached.Count == 1) return Build(Parse(cached[0]));
+            if (cached.Count == 1) return Augment(mediaId, Build(Parse(cached[0])));
         }
 
         List<Chapter> chapters;
@@ -42,12 +42,20 @@ public sealed partial class ChapterService(Database db, IMediaResolver media, IP
             var r = await runner.RunAsync(_ffprobe, ["-v", "error", "-print_format", "json", "-show_chapters", "-i", path], cts.Token);
             chapters = r.ExitCode == 0 ? ParseProbe(r.StdOut) : [];
         }
-        catch (Exception ex) when (ex is OperationCanceledException or System.ComponentModel.Win32Exception) { return Build([]); }   // not cached: try again next time
+        catch (Exception ex) when (ex is OperationCanceledException or System.ComponentModel.Win32Exception) { return Augment(mediaId, Build([])); }   // not cached: try again next time
 
         using var db2 = db.Open();
         Database.Execute(db2, null, "INSERT INTO media_chapters(media_id, mtime_ticks, json, fetched_at) VALUES(@i,@m,@j,@t) ON CONFLICT(media_id) DO UPDATE SET mtime_ticks=excluded.mtime_ticks, json=excluded.json, fetched_at=excluded.fetched_at",
             ("@i", mediaId), ("@m", mtime), ("@j", JsonSerializer.Serialize(chapters)), ("@t", time.GetUtcNow().ToString("O", CultureInfo.InvariantCulture)));
-        return Build(chapters);
+        return Augment(mediaId, Build(chapters));
+    }
+
+    /// <summary>Skip points found by listening to the episodes fill in whatever the file's own chapters don't say.</summary>
+    private ChapterInfo Augment(long mediaId, ChapterInfo info)
+    {
+        if (detected is null) return info;
+        var extra = detected.MarkersFor(mediaId).Where(d => d.End > d.Start && !info.Markers.Any(m => m.Kind == d.Kind)).ToList();
+        return extra.Count == 0 ? info : info with { Markers = [.. info.Markers, .. extra] };
     }
 
     internal static List<Chapter> ParseProbe(string json)

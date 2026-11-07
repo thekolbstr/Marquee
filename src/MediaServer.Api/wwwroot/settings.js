@@ -352,6 +352,34 @@ async function runTask(task, out, confirmText) {
   } catch { out.textContent = 'Could not reach the server.'; out.className = 'save-status bad'; }
 }
 
+// Intro and credits detection: start it, watch it work, forget what it found.
+function skipTask() {
+  const status = h('p', { class: 'save-status' });
+  const bar = h('div', { class: 'meter hidden', role: 'progressbar', 'aria-label': 'Intro and credits search' }, h('i'));
+  let timer = null;
+  async function refresh() {
+    let s;
+    try { s = await api('/api/maintenance/skip-status'); } catch { return; }
+    if (!status.isConnected) { clearInterval(timer); return; }
+    bar.classList.toggle('hidden', !s.running || !s.total);
+    if (s.running && s.total) bar.firstChild.style.width = `${Math.round((s.done / s.total) * 100)}%`;
+    status.className = 'save-status' + (s.error ? ' bad' : '');
+    status.textContent = s.error ? s.error
+      : s.running ? `Listening… ${s.done} of ${s.total}${s.current ? ` · ${s.current}` : ''}`
+      : s.titles ? `Skip points are known for ${s.titles} title${s.titles === 1 ? '' : 's'}${s.lastFinished ? ` · last search ${new Date(s.lastFinished).toLocaleString()}` : ''}.`
+      : s.lastFinished ? 'Nothing found yet. Intros need at least two episodes of a season in the library.' : 'Not searched yet.';
+  }
+  timer = setInterval(refresh, 3000);
+  onLeave(() => clearInterval(timer));
+  refresh();
+  const act = (task, label) => h('button', { class: 'btn glass', type: 'button', onclick: async () => {
+    try { const r = await api(`/api/maintenance/${task}`, { method: 'POST' }); toast(r.message); refresh(); } catch (e) { toast(e.message, true); }
+  } }, label);
+  return h('div', { class: 'task' }, h('div', { class: 'task-text' }, h('strong', {}, 'Find intros and credits'),
+    h('p', {}, 'Compares the openings and endings of episodes within a season (and the fade to black before a film’s credits) to offer Skip intro and Skip credits. It reads a few minutes of audio per episode, a title at a time. Chapters in the file are used first.'), bar, status),
+    h('div', { class: 'task-btns' }, act('scan-skips', 'Search now'), act('clear-skips', 'Forget')));
+}
+
 function maintenancePanel(body) {
   const task = (title, text, button, id, confirmText, danger) => {
     const out = h('p', { class: 'save-status' });
@@ -363,6 +391,7 @@ function maintenancePanel(body) {
   body.append(h('h2', {}, 'Maintenance'), h('p', { class: 'hint' }, 'Housekeeping for the person running the server. Nothing here touches your media files.'),
     h('div', { class: 'task' }, h('div', { class: 'task-text' }, h('strong', {}, 'Scan the library'), h('p', {}, 'Look for new, moved and removed files now.'), scanOut),
       h('button', { class: 'btn glass', type: 'button', onclick: () => { scanBtn.click(); scanOut.textContent = 'Scan started.'; scanOut.className = 'save-status good'; } }, 'Scan now')),
+    skipTask(),
     h('div', { class: 'task' }, h('div', { class: 'task-text' }, h('strong', {}, 'Refresh Live TV'), h('p', {}, 'Re-import the channel list and programme guide.'), liveOut),
       h('button', { class: 'btn glass', type: 'button', onclick: async () => {
         liveOut.className = 'save-status'; liveOut.textContent = 'Fetching…';

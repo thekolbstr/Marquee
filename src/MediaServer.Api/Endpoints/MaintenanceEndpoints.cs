@@ -9,7 +9,7 @@ public static class MaintenanceEndpoints
 {
     public static void MapMaintenanceEndpoints(this WebApplication app)
     {
-        app.MapPost("/api/maintenance/{task}", (string task, bool? confirm, MaintenanceService m, ScanCoordinator scans, TmdbClient tmdb) =>
+        app.MapPost("/api/maintenance/{task}", (string task, bool? confirm, MaintenanceService m, ScanCoordinator scans, TmdbClient tmdb, SkipDetector skips, SkipScanService skipScan) =>
         {
             switch (task)
             {
@@ -18,6 +18,12 @@ public static class MaintenanceEndpoints
                     var n = m.ResetMetadata();
                     scans.TryStart();
                     return Results.Ok(new { message = $"Refreshing details for {n} files. This runs in the background and can take a few minutes." });
+                case "scan-skips":
+                    if (skips.IsRunning) return Results.Ok(new { message = "Already looking. Progress shows below." });
+                    skipScan.Request();
+                    return Results.Ok(new { message = "Started. It works through the library a title at a time in the background." });
+                case "clear-skips":
+                    return Results.Ok(new { message = $"Forgot the skip points found for {skips.Clear()} titles. Run the search again to rebuild them." });
                 case "clear-image-cache":
                     return Results.Ok(new { message = $"Cleared {Bytes(m.ClearImageCache())}. Artwork and thumbnails will be rebuilt as you browse." });
                 case "clean-transcodes":
@@ -42,6 +48,8 @@ public static class MaintenanceEndpoints
             ctx.Response.Headers.CacheControl = "no-store";
             return Results.File(stream, "application/octet-stream", $"mediaserver-backup-{DateTime.UtcNow:yyyyMMdd-HHmm}.db");
         });
+
+        app.MapGet("/api/maintenance/skip-status", (SkipDetector skips) => Results.Ok(skips.Status()));
 
         app.MapGet("/api/system/logs", (MemoryLogStore logs, string? level, string? q, int? limit) =>
             Results.Ok(new { entries = logs.Query(level, q, limit ?? 200) }));

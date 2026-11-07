@@ -74,6 +74,9 @@ locations and the server's own data. `Library__AllowedRoots=/media;/mnt` limits 
   and new files appear in the library within seconds. A search that finds nothing offers to look in Radarr and Sonarr.
 - **More server settings** (Settings): ignore files below a size or with words like "sample" or "extras" in their path, transcode speed and quality (x264 preset and CRF),
   segment lengths, a free-space limit for recordings, a minimum password length, and a message on the sign-in page.
+- **Intro and credits finder** (Settings → Streaming & playback, progress under Maintenance): when a file has no chapters, the server listens to the first and last minutes of
+  each episode and compares them with the other episodes of the season. Sound that repeats (the theme tune, the credits music) becomes Skip intro / Skip credits. For films it
+  looks for the fade to black before the credits. It needs at least two episodes in a season, works one title at a time in the background, and never changes your files.
 - **Light, black and automatic themes.**
 
 ## Security notes

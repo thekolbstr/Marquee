@@ -328,5 +328,31 @@ public static class Migrations
         CREATE INDEX ix_activity_day ON watch_activity(day);
         CREATE INDEX ix_activity_last ON watch_activity(last_at);
         """,
+        // v15: intro / credits detection. Audio fingerprints are kept so a new episode is compared without re-reading the others.
+        """
+        CREATE TABLE skip_prints (
+            media_id    INTEGER PRIMARY KEY REFERENCES media_files(id) ON DELETE CASCADE,
+            mtime_ticks INTEGER NOT NULL,
+            head        BLOB,                 -- fingerprint of the opening minutes, 4 bytes per frame
+            head_offset REAL NOT NULL DEFAULT 0,
+            tail        BLOB,                 -- fingerprint of the closing minutes
+            tail_offset REAL NOT NULL DEFAULT 0
+        );
+        CREATE TABLE skip_markers (
+            media_id INTEGER NOT NULL REFERENCES media_files(id) ON DELETE CASCADE,
+            kind     TEXT    NOT NULL,        -- intro | credits
+            start_s  REAL    NOT NULL,
+            end_s    REAL    NOT NULL,
+            source   TEXT    NOT NULL,        -- audio | black
+            PRIMARY KEY (media_id, kind)
+        );
+        CREATE TABLE skip_scans (
+            media_id    INTEGER PRIMARY KEY REFERENCES media_files(id) ON DELETE CASCADE,
+            mtime_ticks INTEGER NOT NULL,
+            version     INTEGER NOT NULL,
+            group_size  INTEGER NOT NULL DEFAULT 1,
+            scanned_at  TEXT    NOT NULL
+        );
+        """,
     ];
 }
