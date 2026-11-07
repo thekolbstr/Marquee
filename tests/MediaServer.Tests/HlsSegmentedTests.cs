@@ -82,6 +82,24 @@ public class HlsQualityAndPlaylistTests
     }
 
     [Fact]
+    public void TheEncodingSpeedAndQualitySettings_ReachTheEncoder()
+    {
+        var o = new HlsOptions { Preset = "slow", Crf = 18 };
+        var full = HlsCommandBuilder.Build("/a.mkv", "/tmp/s", HlsPlanner.Decide(Src(1920, codec: "hevc"), o, ClientCaps.Baseline, ".mkv")!, o);
+        Assert.Equal(("slow", "18"), (full[full.IndexOf("-preset") + 1], full[full.IndexOf("-crf") + 1]));
+        var capped = HlsCommandBuilder.Build("/a.mkv", "/tmp/s", HlsPlanner.Decide(Src(1920, codec: "hevc"), o, ClientCaps.Baseline, ".mkv", quality: "480p")!, o);
+        Assert.Equal("20", capped[capped.IndexOf("-crf") + 1]);                                 // bitrate-capped streams stay a little softer
+    }
+
+    [Theory] [InlineData("slow", "slow")] [InlineData("SLOW", "slow")] [InlineData("placebo", "veryfast")] [InlineData("; rm -rf /", "veryfast")] [InlineData(null, "veryfast")]
+    public void OnlyKnownPresetsAreAccepted(string? preset, string expected)
+        => Assert.Equal(expected, HlsOptions.From(new Microsoft.Extensions.Configuration.ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?> { ["Hls:Preset"] = preset }).Build()).Preset);
+
+    [Theory] [InlineData("3", 14)] [InlineData("99", 30)] [InlineData("23", 23)] [InlineData("x", 21)]
+    public void TheCrfIsKeptInASaneRange(string crf, int expected)
+        => Assert.Equal(expected, HlsOptions.From(new Microsoft.Extensions.Configuration.ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?> { ["Hls:Crf"] = crf }).Build()).Crf);
+
+    [Fact]
     public void SegmentedBuilder_FromTheStart_HasNoSeek_AndNvencUsesConstrainedVbr()
     {
         var plan = HlsPlanner.Decide(Src(1920), new HlsOptions { Encoder = "nvenc" }, ClientCaps.Baseline, ".mkv", quality: "480p")!;

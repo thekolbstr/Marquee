@@ -13,6 +13,11 @@ public sealed class HlsOptions
     /// <summary>"libx264" (CPU) or "nvenc" (NVIDIA GPU).</summary>
     public string Encoder { get; init; } = "libx264";
     public int MaxHeight { get; init; } = 1080;
+    /// <summary>x264 speed preset: slower is smaller and nicer at the same quality but uses far more CPU.</summary>
+    public string Preset { get; init; } = "veryfast";
+    /// <summary>x264 quality for transcodes of full-quality files (lower is better and bigger).</summary>
+    public int Crf { get; init; } = 21;
+    public static readonly string[] Presets = ["ultrafast", "superfast", "veryfast", "faster", "fast", "medium", "slow"];
     /// <summary>When false, anything that would need the video re-encoded is refused (direct play and direct stream still work).</summary>
     public bool AllowTranscoding { get; init; } = true;
     public int ReapIntervalSeconds { get; init; } = 10;
@@ -35,6 +40,8 @@ public sealed class HlsOptions
             Encoder = (c["Hls:Encoder"] ?? d.Encoder).ToLowerInvariant() is "nvenc" ? "nvenc" : "libx264",
             AllowTranscoding = c.GetValue("Hls:AllowTranscoding", d.AllowTranscoding),
             MaxHeight = Math.Max(240, c.GetValue("Hls:MaxHeight", d.MaxHeight)),
+            Preset = Presets.Contains((c["Hls:Preset"] ?? "").ToLowerInvariant()) ? c["Hls:Preset"]!.ToLowerInvariant() : d.Preset,
+            Crf = int.TryParse(c["Hls:Crf"], out var crf) ? Math.Clamp(crf, 14, 30) : d.Crf,
             ReapIntervalSeconds = Math.Max(1, c.GetValue("Hls:ReapIntervalSeconds", d.ReapIntervalSeconds)),
             SegmentWaitSeconds = Math.Clamp(c.GetValue("Hls:SegmentWaitSeconds", d.SegmentWaitSeconds), 1, 300),
             LiveSegmentSeconds = Math.Clamp(c.GetValue("Hls:LiveSegmentSeconds", d.LiveSegmentSeconds), 1, 10),

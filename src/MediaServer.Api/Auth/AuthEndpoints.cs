@@ -24,7 +24,7 @@ public static class AuthEndpoints
             ctx.Response.Headers.CacheControl = "no-store";
             if (!auth.Enabled) return Results.Ok(new { authEnabled = false, setupRequired = false, authenticated = true, user = (string?)null, setupCodeRequired = false, serverName = auth.ServerName, name = (string?)null, role = "admin" });
             var user = auth.Validate(ctx.Request.Cookies[AuthService.CookieName]);
-            return Results.Ok(new { authEnabled = true, setupRequired = !auth.HasUsers(), authenticated = user is not null, user = user?.Username, name = user?.Name, displayName = user?.DisplayName, role = user?.Role, setupCodeRequired = auth.SetupCodeRequired, serverName = auth.ServerName });
+            return Results.Ok(new { authEnabled = true, setupRequired = !auth.HasUsers(), authenticated = user is not null, user = user?.Username, name = user?.Name, displayName = user?.DisplayName, role = user?.Role, setupCodeRequired = auth.SetupCodeRequired, serverName = auth.ServerName, loginMessage = auth.LoginMessage });
         });
 
         app.MapPost("/api/auth/setup", (SetupBody body, AuthService auth, HttpContext ctx) =>

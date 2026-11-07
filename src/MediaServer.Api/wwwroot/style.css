@@ -562,3 +562,28 @@ pre.codes { background: var(--bg); border: 1px solid var(--line); border-radius:
   #top > a.icon-btn { order: 3; }
   .set-nav { top: 24px; }
 }
+.auth-note { margin: 14px 0 0; padding: 10px 14px; border-radius: 10px; background: var(--surface-2); color: var(--muted); font-size: .88rem; text-align: center; }
+
+/* ---- drop-downs: bigger, with our own arrow, and a focus ring */
+select, select.sort {
+  -webkit-appearance: none; appearance: none; font: inherit; font-size: 1rem; font-weight: 500; line-height: 1.3; cursor: pointer; color: var(--text);
+  min-height: 46px; padding: 11px 44px 11px 16px; border-radius: 12px; border: 1px solid var(--line); max-width: 100%;
+  background: var(--surface) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%238d97a8' stroke-width='2.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E") no-repeat right 14px center / 16px;
+  transition: border-color .15s, box-shadow .15s, background-color .15s;
+}
+select:hover { border-color: color-mix(in srgb, var(--accent) 55%, var(--line)); background-color: var(--surface-2); }
+select:focus-visible { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 28%, transparent); }
+select:disabled { opacity: .5; cursor: default; }
+select option { background: var(--surface); color: var(--text); font-size: 1rem; padding: 10px 12px; }
+.set-body select.sort, .dlg select.sort { min-width: min(100%, 280px); }
+.dlg select.sort { width: 100%; }
+@media (max-width: 720px) { .set-body select.sort { width: 100%; } .page-head select.sort { flex: 1 1 140px; margin-left: 0; } }
+
+/* ---- the add / details window: scrolls when it's tall, and the buttons stay in view */
+.dlg.arr-add { width: min(580px, 100%); max-height: min(90vh, 800px); overflow-y: auto; overscroll-behavior: contain; }
+.dlg.arr-add > * { flex-shrink: 0; }
+.dlg.arr-add .dlg-actions { position: sticky; bottom: -22px; z-index: 1; margin: 4px -22px -22px; padding: 14px 22px 18px; background: var(--surface); border-top: 1px solid var(--line); align-items: center; }
+.dlg.arr-add .dlg-actions .btn:not(.small) { padding-inline: 28px; }
+.arr-about h3 { margin: 4px 0 6px; font-size: .78rem; letter-spacing: .1em; text-transform: uppercase; color: var(--muted); } .arr-about p { margin: 0; line-height: 1.55; }
+.arr-facts { grid-template-columns: max-content 1fr; font-size: .9rem; }
+.arr-add-info { min-width: 0; flex: 1; }

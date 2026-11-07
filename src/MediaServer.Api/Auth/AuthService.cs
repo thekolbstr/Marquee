@@ -74,15 +74,19 @@ public sealed partial class AuthService(Database db, IConfiguration config, Time
     private static readonly HashSet<string> Weak = new(StringComparer.OrdinalIgnoreCase)
         { "password", "password1", "12345678", "123456789", "1234567890", "qwertyui", "qwerty123", "iloveyou", "admin123", "letmein1", "11111111", "00000000" };
 
-    internal static void ValidateCredentials(string? username, string? password)
+    internal static void ValidateCredentials(string? username, string? password, int minPassword = 8)
     {
         if (username is null || !UsernameRx().IsMatch(username)) throw new AuthException("Usernames are 3–32 characters: letters, numbers, dot, dash or underscore.");
-        ValidatePassword(password, username);
+        ValidatePassword(password, username, minPassword);
     }
 
-    internal static void ValidatePassword(string? password, string? username = null)
+    /// <summary>Shortest password a new or changed password may be (Settings → Network & security). Never below 8.</summary>
+    public int MinPasswordLength => MinPasswordFrom(config);
+    internal static int MinPasswordFrom(IConfiguration c) => int.TryParse(c["Auth:MinPasswordLength"], out var n) ? Math.Clamp(n, 8, 64) : 8;
+
+    internal static void ValidatePassword(string? password, string? username = null, int minLength = 8)
     {
-        if (password is null || password.Length < 8) throw new AuthException("Passwords need at least 8 characters.");
+        if (password is null || password.Length < minLength) throw new AuthException($"Passwords need at least {minLength} characters.");
         if (password.Length > 200) throw new AuthException("That password is too long.");
         if (Weak.Contains(password) || (username is not null && password.Equals(username, StringComparison.OrdinalIgnoreCase))) throw new AuthException("That password is too easy to guess.");
     }
@@ -94,7 +98,7 @@ public sealed partial class AuthService(Database db, IConfiguration config, Time
         var required = config["Auth:SetupCode"];
         if (!string.IsNullOrEmpty(required) && !FixedEquals(required, setupCode ?? ""))
             throw new AuthException("That setup code isn't right.", 403);
-        ValidateCredentials(username, password);
+        ValidateCredentials(username, password, MinPasswordLength);
         var display = CleanDisplayName(displayName);
         var hash = PasswordHasher.Hash(password!, Iterations);
         using var c = db.Open();
@@ -311,12 +315,12 @@ public sealed partial class AuthService(Database db, IConfiguration config, Time
     /// <summary>Changes the password and signs out every other device.</summary>
     public void ChangePassword(long userId, string? current, string? next, string? keepToken)
     {
-        ValidatePassword(next);
+        ValidatePassword(next, null, MinPasswordLength);
         using var c = db.Open();
         var rows = Database.Query(c, "SELECT username, password_hash FROM users WHERE id=@i", r => (r.GetString(0), r.GetString(1)), ("@i", userId));
         if (rows.Count == 0) throw new AuthException("Not signed in.", 401);
         if (!PasswordHasher.Verify(current ?? "", rows[0].Item2)) throw new AuthException("Your current password isn't right.", 403);
-        ValidatePassword(next, rows[0].Item1);
+        ValidatePassword(next, rows[0].Item1, MinPasswordLength);
         Database.Execute(c, null, "UPDATE users SET password_hash=@h WHERE id=@i", ("@h", PasswordHasher.Hash(next!, Iterations)), ("@i", userId));
         if (keepToken is { Length: > 0 }) Database.Execute(c, null, "DELETE FROM sessions WHERE user_id=@i AND token_hash<>@k", ("@i", userId), ("@k", Hash(keepToken)));
         else Database.Execute(c, null, "DELETE FROM sessions WHERE user_id=@i", ("@i", userId));
@@ -407,6 +411,8 @@ public sealed partial class AuthService(Database db, IConfiguration config, Time
             : Database.Execute(c, null, "DELETE FROM sessions WHERE user_id=@u AND token_hash<>@k", ("@u", userId), ("@k", Hash(currentToken)));
     }
 
+    /// <summary>An optional note shown on the sign-in page (Settings → General).</summary>
+    public string? LoginMessage => config["General:LoginMessage"] is { Length: > 0 and <= 300 } m ? m : null;
     public string ServerName => config["General:ServerName"] is { Length: > 0 and <= 40 } n ? n : "MediaServer";
 
     private static string Hash(string token) => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(token)));

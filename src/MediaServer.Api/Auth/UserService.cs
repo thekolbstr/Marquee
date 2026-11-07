@@ -25,7 +25,7 @@ public sealed class UserService(Database db, IConfiguration config, TimeProvider
 
     public UserInfo Create(string? username, string? password, string? displayName, string? role)
     {
-        AuthService.ValidateCredentials(username, password);
+        AuthService.ValidateCredentials(username, password, AuthService.MinPasswordFrom(config));
         var r = NormalizeRole(role);
         var display = AuthService.CleanDisplayName(displayName);
         using var c = db.Open();
@@ -56,7 +56,7 @@ public sealed class UserService(Database db, IConfiguration config, TimeProvider
     {
         using var c = db.Open();
         var u = Get(c, id) ?? throw new AuthException("No such user.", 404);
-        AuthService.ValidatePassword(newPassword, u.Username);
+        AuthService.ValidatePassword(newPassword, u.Username, AuthService.MinPasswordFrom(config));
         Database.Execute(c, null, "UPDATE users SET password_hash=@h WHERE id=@i", ("@h", PasswordHasher.Hash(newPassword!, Iterations)), ("@i", id));
         Database.Execute(c, null, "DELETE FROM sessions WHERE user_id=@i", ("@i", id));
     }

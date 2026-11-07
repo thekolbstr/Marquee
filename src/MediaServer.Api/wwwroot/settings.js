@@ -247,7 +247,7 @@ async function serverPanel(body, groupId) {
   const folders = groupId === 'library' ? h('div', { class: 'folders-block' }, h('h3', {}, 'Media folders')) : null;
   if (folders) { body.append(h('h2', {}, group.title), h('p', { class: 'hint' }, group.description), folders); await folderManager(folders, {}); }
   const extra = groupId === 'network' ? [await httpsCard()] : groupId === 'livetv' ? [recordingsNote()] : [];
-  body.append(...(folders ? [h('h3', { class: 'sub' }, 'Scanning')] : [h('h2', {}, group.title), h('p', { class: 'hint' }, group.description)]), ...rows, h('div', { class: 'actions-row' }, save, status), tools.length ? h('div', { class: 'actions-row' }, ...tools) : null, ...extra);
+  body.append(...(folders ? [h('h3', { class: 'sub' }, 'Scanning')] : [h('h2', {}, group.title), h('p', { class: 'hint' }, group.description)]), ...rows, h('div', { class: 'actions-row' }, save, status), ...(tools.length ? [h('div', { class: 'actions-row' }, ...tools)] : []), ...extra);
 }
 
 // ================================================================ media folders

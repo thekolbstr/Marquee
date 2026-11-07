@@ -54,10 +54,15 @@ public sealed class SettingsService(Database db, DbSettingsProvider provider, IC
         // general
         new("General:ServerName", "general", "Server name", "Shown in the header, the browser tab and on the sign-in page.", SettingKind.Text, Placeholder: "MediaServer"),
 
+        new("General:LoginMessage", "general", "Sign-in message", "Optional. A short note shown under the sign-in form, such as who to ask for an account.", SettingKind.Text, Placeholder: "Ask Alex if you need an account"),
+
         // library
         new("Library:AutoScan", "library", "Scan automatically", "Look for new and removed files on a schedule, so nobody has to press the scan button.", SettingKind.Bool, Default: "true"),
         new("Library:ScanIntervalMinutes", "library", "Scan every", "0 means scan once when the server starts.", SettingKind.Int, 0, 10080, Default: "360", Unit: "minutes"),
         new("Library:ProbeParallelism", "library", "Files analysed at once", "More is faster on a big first scan but works the disk harder. Lower it for a NAS or a spinning disk.", SettingKind.Int, 1, 16, Default: "4"),
+
+        new("Library:MinFileSizeMb", "library", "Ignore files smaller than", "Skips samples and trailers. 0 includes everything. Files that no longer qualify leave the library at the next scan; nothing on disk is touched.", SettingKind.Int, 0, 10240, Default: "0", Unit: "MB"),
+        new("Library:IgnoreWords", "library", "Ignore folders and files containing", "Words separated by commas, for example sample, extras, featurettes. Anything whose folder or file name contains one is left out of the library.", SettingKind.Text, Placeholder: "sample, extras, featurettes"),
 
         // metadata
         new("Tmdb:ReadAccessToken", "metadata", "TMDB read access token", "The long “API Read Access Token” from themoviedb.org → Settings → API. Preferred over the API key.", SettingKind.Secret),
@@ -70,6 +75,11 @@ public sealed class SettingsService(Database db, DbSettingsProvider provider, IC
         new("Hls:Encoder", "streaming", "Video encoder", "Software works everywhere. NVIDIA needs a GPU and the NVIDIA container runtime; if it isn't available, transcodes fail.", SettingKind.Choice, Default: "libx264", Options: Opt(("libx264", "Software (CPU)"), ("nvenc", "NVIDIA GPU (NVENC)"))),
         new("Hls:MaxSessions", "streaming", "Simultaneous streams", "Starting one more stops the one nobody has touched the longest. Live TV counts as a stream.", SettingKind.Int, 1, 16, Default: "2"),
         new("Hls:MaxHeight", "streaming", "Largest transcode", "Transcodes are scaled down to this height. Originals that don't need transcoding are never changed.", SettingKind.Choice, Default: "1080", Options: Opt(("480", "480p"), ("720", "720p"), ("1080", "1080p"), ("1440", "1440p"), ("2160", "4K"))),
+        new("Hls:Preset", "streaming", "Encoding speed", "Software transcodes only. Slower gives a smaller or nicer picture at the same quality but uses a lot more CPU. “Very fast” suits most servers.", SettingKind.Choice, Default: "veryfast",
+            Options: Opt(("ultrafast", "Ultra fast"), ("superfast", "Super fast"), ("veryfast", "Very fast"), ("faster", "Faster"), ("fast", "Fast"), ("medium", "Medium"), ("slow", "Slow"))),
+        new("Hls:Crf", "streaming", "Transcode quality", "Software transcodes only. Lower numbers look better and make bigger streams. 18 is near-lossless, 21 is a good default, 26 is noticeably softer.", SettingKind.Int, 14, 30, Default: "21"),
+        new("Hls:SegmentSeconds", "streaming", "Movie and show segment length", "How long each piece of a transcoded video is. Shorter starts and seeks faster, longer is gentler on the CPU. Applies to streams started afterwards.", SettingKind.Int, 2, 20, Default: "6", Unit: "seconds"),
+        new("Hls:LiveSegmentSeconds", "streaming", "Live TV segment length", "Shorter means a faster channel change but more load. Applies to streams started afterwards.", SettingKind.Int, 1, 10, Default: "2", Unit: "seconds"),
         new("Hls:IdleSeconds", "streaming", "Stop idle streams after", "A stream nobody is watching (a closed tab) is ended after this long.", SettingKind.Int, 30, 900, Default: "120", Unit: "seconds"),
         new("Playback:Trickplay", "streaming", "Seek-bar previews", "Show a small picture when you hover or drag on the progress bar. The server reads each title once in the background to make them, which takes a while on large files.", SettingKind.Bool, Default: "true"),
         new("Playback:WatchedPercent", "streaming", "Mark as watched after", "Share of the runtime you must pass for a title to count as watched.", SettingKind.Int, 50, 100, Default: "92", Unit: "%"),
@@ -85,6 +95,7 @@ public sealed class SettingsService(Database db, DbSettingsProvider provider, IC
         new("Recordings:MaxConcurrent", "livetv", "Recordings at once", "How many channels can be recorded at the same time.", SettingKind.Int, 1, 8, Default: "2"),
         new("Recordings:BeforeSeconds", "livetv", "Start recording early by", "A little before a scheduled programme, in case it starts early.", SettingKind.Int, 0, 1800, Default: "60", Unit: "seconds"),
         new("Recordings:AfterSeconds", "livetv", "Keep recording afterwards for", "Live TV often runs over.", SettingKind.Int, 0, 3600, Default: "120", Unit: "seconds"),
+        new("Recordings:MinFreeGb", "livetv", "Stop recording when free space is below", "Protects the disk: a recording that would leave less than this free is not started.", SettingKind.Int, 0, 10000, Default: "2", Unit: "GB"),
         new("Recordings:KeepDays", "livetv", "Delete recordings after", "0 keeps them until you delete them yourself.", SettingKind.Int, 0, 3650, Default: "0", Unit: "days"),
 
         // downloads (Radarr / Sonarr)
@@ -96,6 +107,7 @@ public sealed class SettingsService(Database db, DbSettingsProvider provider, IC
         // network & security
         new("Cast:BaseUrl", "network", "Address for casting", "Optional. Cast devices (Chromecast) fetch the video themselves, so they need an address for this server that works from their side: plain http, not https. Leave empty to use the one you're browsing with.", SettingKind.Url, Placeholder: "http://192.0.2.10:8080"),
         new("Auth:SessionDays", "network", "“Keep me signed in” lasts", "How long a remembered sign-in stays valid. Applies to new sign-ins.", SettingKind.Int, 1, 365, Default: "30", Unit: "days"),
+        new("Auth:MinPasswordLength", "network", "Shortest password allowed", "Applies when someone sets or changes a password. Existing passwords keep working.", SettingKind.Int, 8, 64, Default: "8", Unit: "characters"),
         new("Auth:IdleHours", "network", "Other sign-ins end after", "Sign-ins that weren't remembered end after this long without use.", SettingKind.Int, 1, 168, Default: "12", Unit: "hours"),
         new("Auth:TrustProxy", "network", "Behind a reverse proxy", "Turn on if this server sits behind Traefik, nginx or Caddy, so failed sign-ins are tracked per visitor instead of per proxy. Leave it off if visitors connect directly.", SettingKind.Bool, Default: "false"),
     ];
@@ -215,7 +227,7 @@ public sealed class SettingsService(Database db, DbSettingsProvider provider, IC
                 if (v.Length > 600 || v.Any(char.IsWhiteSpace)) throw new SettingsException(d.Key, "That doesn't look like a valid key");
                 return v;
             default:
-                if (v.Length > (d.Key == "General:ServerName" ? 40 : 500)) throw new SettingsException(d.Key, "Too long");
+                if (v.Length > (d.Key == "General:ServerName" ? 40 : d.Key == "General:LoginMessage" ? 300 : 500)) throw new SettingsException(d.Key, "Too long");
                 return v;
         }
     }

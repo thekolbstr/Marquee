@@ -65,7 +65,7 @@ public static class HlsCommandBuilder
                 a.AddRange(["-c:v", "h264_nvenc", "-preset", "p4", "-rc", "vbr", "-cq", plan.VideoKbps is null ? "23" : "28", "-b:v", "0",
                             "-pix_fmt", "yuv420p", "-profile:v", "high", "-forced-idr", "1", "-force_key_frames", keyframes, .. noB, .. rate]);
             else
-                a.AddRange(["-c:v", "libx264", "-preset", "veryfast", "-crf", plan.VideoKbps is null ? "21" : "23", "-pix_fmt", "yuv420p",
+                a.AddRange(["-c:v", "libx264", "-preset", o.Preset, "-crf", (plan.VideoKbps is null ? o.Crf : o.Crf + 2).ToString(System.Globalization.CultureInfo.InvariantCulture), "-pix_fmt", "yuv420p",
                             "-profile:v", "high", "-level", "4.1", "-sc_threshold", "0", "-force_key_frames", keyframes, .. noB, .. rate]);
         }
 

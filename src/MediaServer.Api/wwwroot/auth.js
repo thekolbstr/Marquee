@@ -59,7 +59,8 @@ function showLogin(onDone, notice) {
   const btn = h('button', { class: 'btn auth-btn', type: 'submit' }, 'Sign in');
   const form = h('form', { class: 'auth-card', novalidate: true },
     h('h1', {}, 'Welcome back'), h('p', { class: 'auth-sub' }, notice || 'Sign in to continue.'),
-    user, pw.el, h('label', { class: 'auth-check' }, remember, 'Keep me signed in'), err, btn);
+    user, pw.el, h('label', { class: 'auth-check' }, remember, 'Keep me signed in'), err, btn,
+    AUTH.loginMessage ? h('p', { class: 'auth-note' }, AUTH.loginMessage) : null);
   async function submit() {
     err.classList.add('hidden');
     if (!user.value.trim() || !pw.input.value) { err.textContent = 'Enter your username and password.'; err.classList.remove('hidden'); return; }

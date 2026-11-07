@@ -169,7 +169,7 @@ function row(title, tiles, seeAll, poster) {
 const skelRow = () => h('section', { class: 'rowsec' }, h('div', { class: 'rowhead' }, h('div', { class: 'skel', style: 'width:160px;height:22px' })),
   h('div', { class: 'scroller' }, Array.from({ length: 6 }, () => h('div', { class: 'tile' }, h('div', { class: 'skel card' })))));
 
-const setView = (...nodes) => { view.replaceChildren(...nodes); window.scrollTo(0, 0); };
+const setView = (...nodes) => { view.replaceChildren(...nodes.filter(Boolean)); window.scrollTo(0, 0); };
 const showError = (e) => AUTH.locked ? null : setView(h('div', { class: 'error' }, e.message || String(e)));
 
 // ================================================================ what this browser can decode (sent to the server)
@@ -344,7 +344,8 @@ async function showHome() {
     if (slides.length < 5 && shows.items[i]) slides.push(shows.items[i]);
   }
   const page = h('div', { class: 'page' });
-  page.append(libraryNotice(status));
+  const notice = libraryNotice(status);
+  if (notice) page.append(notice);
   if (pref('homeGreeting') === 'on' && AUTH.enabled && AUTH.user) page.append(h('h1', { class: 'greeting' }, `${greeting()}, `, h('span', {}, greetingName())));
   if (pref('homeQuick') === 'on') page.append(h('div', { class: 'quick' },
     h('button', { class: 'chip', type: 'button', onclick: () => surprise('movie') }, icon('dice'), 'Random movie'),
@@ -774,7 +775,7 @@ function startApp() {
   let st;
   try { st = await (await fetch('/api/auth/state', { cache: 'no-store' })).json(); }
   catch { view.replaceChildren(h('div', { class: 'error' }, 'Can’t reach the server. Check that it’s running, then reload.')); return; }
-  AUTH.enabled = st.authEnabled; AUTH.user = st.user; AUTH.name = st.name; AUTH.displayName = st.displayName; AUTH.role = st.role || 'admin'; applyServerName(st.serverName);
+  AUTH.enabled = st.authEnabled; AUTH.user = st.user; AUTH.name = st.name; AUTH.displayName = st.displayName; AUTH.role = st.role || 'admin'; AUTH.loginMessage = st.loginMessage || null; applyServerName(st.serverName);
   if (st.setupRequired) { showSetup(st, () => { location.hash = '#/welcome'; startApp(); }); return; }
   if (!st.authenticated) { showLogin(startApp); return; }
   startApp();

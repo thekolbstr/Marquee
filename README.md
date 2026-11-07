@@ -72,6 +72,8 @@ locations and the server's own data. `Library__AllowedRoots=/media;/mnt` limits 
 - **Radarr & Sonarr** (Settings → Downloads): save each app's address and API key (Sonarr v4), then use **Downloads** in the menu to see what's downloading, what's coming in the next
   three weeks, and to search for a movie or show and add it with the quality and folder you choose. Add the webhook address shown in Settings to each app (Connect → Webhook, "On Import")
   and new files appear in the library within seconds. A search that finds nothing offers to look in Radarr and Sonarr.
+- **More server settings** (Settings): ignore files below a size or with words like "sample" or "extras" in their path, transcode speed and quality (x264 preset and CRF),
+  segment lengths, a free-space limit for recordings, a minimum password length, and a message on the sign-in page.
 - **Light, black and automatic themes.**
 
 ## Security notes

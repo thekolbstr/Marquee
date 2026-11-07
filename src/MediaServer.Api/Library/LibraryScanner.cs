@@ -49,7 +49,7 @@ public sealed class LibraryScanner(Database db, IMediaProbe probe, IConfiguratio
                 if (r.Prefix != LibraryFolders.RecordingsPrefix) log.LogWarning("Library folder {Folder} is unavailable; skipping it", r.Path);   // no recordings yet is normal
                 continue;
             }
-            foreach (var (rel, stamp) in Enumerate(r.Path, ct)) found[r.Prefix + rel] = stamp;
+            foreach (var (rel, stamp) in Enumerate(r.Path, ct, ScanFilter.From(config))) found[r.Prefix + rel] = stamp;
         }
 
         using var conn = db.Open();
@@ -189,7 +189,7 @@ public sealed class LibraryScanner(Database db, IMediaProbe probe, IConfiguratio
         return first;
     }
 
-    private static Dictionary<string, Stamp> Enumerate(string root, CancellationToken ct)
+    private static Dictionary<string, Stamp> Enumerate(string root, CancellationToken ct, ScanFilter filter)
     {
         var result = new Dictionary<string, Stamp>(StringComparer.Ordinal);
         if (!Directory.Exists(root)) throw new DirectoryNotFoundException("The library folder is missing or not mounted");
@@ -200,6 +200,7 @@ public sealed class LibraryScanner(Database db, IMediaProbe probe, IConfiguratio
             if (!Extensions.Contains(fi.Extension) || fi.Name.StartsWith('.')) continue;
             var rel = Path.GetRelativePath(root, fi.FullName);
             if (rel.Split(Path.DirectorySeparatorChar).Any(seg => seg.StartsWith('.') || seg == "@eaDir")) continue;
+            if (!filter.Allows(rel, fi.Length)) continue;
             result[rel] = new Stamp(fi.Length, fi.LastWriteTimeUtc.Ticks);
         }
         return result;
