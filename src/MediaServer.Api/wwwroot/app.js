@@ -23,6 +23,7 @@ const SVG_NS = 'http://www.w3.org/2000/svg';
 const ICONS = {
   play: { d: 'M8 5.14v13.72a1 1 0 0 0 1.5.86l11-6.86a1 1 0 0 0 0-1.72l-11-6.86A1 1 0 0 0 8 5.14z', fill: true },
   back: { d: 'M15 18l-6-6 6-6' },
+  search: { d: 'M11 4a7 7 0 1 0 0 14 7 7 0 0 0 0-14zM21 21l-4.6-4.6' },
   left: { d: 'M15 18l-6-6 6-6' },
   right: { d: 'M9 18l6-6-6-6' },
   check: { d: 'M20 6L9 17l-5-5' },

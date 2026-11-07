@@ -59,6 +59,7 @@ builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.AddHttpClient<TmdbClient>(c => c.Timeout = TimeSpan.FromSeconds(30)).RemoveAllLoggers(); // URLs may carry api_key
 builder.Services.AddHttpClient<ArrService>(c => c.Timeout = TimeSpan.FromSeconds(20)).RemoveAllLoggers();
 builder.Services.AddSingleton<ArrWebhook>();
+builder.Services.AddHttpClient<ArrArt>(c => c.Timeout = TimeSpan.FromSeconds(30));
 builder.Services.AddHttpClient<ImageCache>(c => c.Timeout = TimeSpan.FromSeconds(60));
 builder.Services.AddScoped<MetadataService>();
 builder.Services.AddSingleton(sp => HlsOptions.From(sp.GetRequiredService<IConfiguration>()));
@@ -111,7 +112,9 @@ if (httpsCert is not null && app.Configuration.GetValue("Https:RedirectHttp", fa
         if (!ctx.Request.IsHttps && !ctx.Request.Path.StartsWithSegments("/health")) { ctx.Response.Redirect($"https://{ctx.Request.Host.Host}:{httpsPort}{ctx.Request.Path}{ctx.Request.QueryString}", permanent: false); return; }
         await next();
     });
-app.UseStaticFiles(); // the web client (wwwroot/): public, it contains no data
+// The web client (wwwroot/): public, it contains no data. "no-cache" means the browser asks the server whether its copy is still current
+// (a cheap 304 when it is), so an update shows up on the next reload instead of whenever the browser decides its copy is stale.
+app.UseStaticFiles(new StaticFileOptions { OnPrepareResponse = c => c.Context.Response.Headers.CacheControl = c.File.Name.StartsWith("icon", StringComparison.Ordinal) || c.Context.Request.Path.StartsWithSegments("/vendor") ? "public, max-age=86400" : "no-cache" });
 app.UseMiddleware<AuthMiddleware>();
 
 app.MapGet("/health", () => Results.Ok(new { status = "ok" }));

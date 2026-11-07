@@ -17,6 +17,26 @@ const arrDate = (iso) => {
   const d = new Date(iso);
   return Number.isNaN(d.getTime()) ? '' : d.toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' });
 };
+/** "Today", "Tomorrow" or "Fri 14 Nov" for the date badge on a coming-soon card. */
+const arrWhen = (iso) => {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '';
+  const days = Math.round((new Date(d.getFullYear(), d.getMonth(), d.getDate()) - new Date(new Date().getFullYear(), new Date().getMonth(), new Date().getDate())) / 86400000);
+  return days <= 0 ? 'Today' : days === 1 ? 'Tomorrow' : arrDate(iso);
+};
+
+/** Cover art, or a coloured placeholder with the title's initial while there is none (or it fails to load). */
+function arrPoster(title, src, cls = '') {
+  const hue = hashHue(title || '?');
+  const box = h('div', { class: `arr-art ${cls}`, style: `background:linear-gradient(145deg,hsl(${hue} 42% 30%),hsl(${(hue + 45) % 360} 48% 14%))` },
+    h('span', { class: 'arr-initial', 'aria-hidden': 'true' }, (title || '?').trim().charAt(0).toUpperCase()));
+  if (src) {
+    const img = h('img', { alt: '', loading: 'lazy', decoding: 'async', src });
+    img.addEventListener('error', () => img.remove());
+    box.append(img);
+  }
+  return box;
+}
 
 async function showDownloads(params) {
   if (!isAdmin()) { setView(h('div', { class: 'page' }, h('p', { class: 'error' }, 'Only administrators can manage downloads.'))); return; }
@@ -28,49 +48,74 @@ async function showDownloads(params) {
       h('a', { class: 'btn', href: '#/settings/downloads' }, 'Set up')));
     return;
   }
-  const queue = h('div', { class: 'panel' }), upcoming = h('div', { class: 'panel' }), results = h('div', { class: 'dlg-list find' });
-  const input = h('input', { type: 'search', class: 'dlg-input', placeholder: 'Search to add a movie or show', 'aria-label': 'Search to add', value: params.get('q') || '' });
-  setView(h('div', { class: 'page' }, h('div', { class: 'page-head' }, h('h1', {}, 'Downloads')),
-    h('div', { class: 'panel' }, h('h3', {}, 'Add to your library'), h('form', { class: 'inline', onsubmit: (e) => { e.preventDefault(); find(); } }, input, h('button', { class: 'btn', type: 'submit' }, 'Search')), results),
-    queue, upcoming));
+  const summary = h('div', { class: 'arr-pills' });
+  const results = h('div', { class: 'arr-results' });
+  const queue = h('section', { class: 'arr-section' }), upcoming = h('section', { class: 'arr-section' });
+  const input = h('input', { type: 'search', class: 'arr-search', placeholder: 'Find a movie or show to add…', 'aria-label': 'Search to add', enterkeyhint: 'search', value: params.get('q') || '' });
+  const sources = [info.radarr ? 'Radarr' : null, info.sonarr ? 'Sonarr' : null].filter(Boolean).join(' & ');
+  setView(h('div', { class: 'page arr-page' },
+    h('div', { class: 'page-head' }, h('h1', {}, 'Downloads'), summary),
+    h('form', { class: 'arr-find', onsubmit: (e) => { e.preventDefault(); find(); } }, icon('search'), input, h('button', { class: 'btn', type: 'submit' }, 'Search')),
+    h('p', { class: 'dur arr-via' }, `Adds go to ${sources}, which searches for a good copy straight away.`),
+    results, queue, upcoming));
+
+  const counts = { queue: 0, upcoming: 0 };
+  const paintSummary = () => summary.replaceChildren(
+    h('span', { class: 'arr-pill' }, h('b', {}, counts.queue), ' downloading'), h('span', { class: 'arr-pill' }, h('b', {}, counts.upcoming), ' coming up'));
 
   async function find() {
     const term = input.value.trim();
     if (!term) { results.replaceChildren(); return; }
-    results.replaceChildren(h('div', { class: 'dur' }, 'Searching…'));
+    results.replaceChildren(h('p', { class: 'dur' }, 'Searching…'));
     try {
       const { items } = await api(`/api/arr/lookup?term=${encodeURIComponent(term)}`);
-      results.replaceChildren(...(items.length ? items.map(lookupRow) : [h('div', { class: 'dur' }, 'Nothing found. Try a different spelling.')]));
-    } catch (e) { results.replaceChildren(h('div', { class: 'error' }, e.message)); }
+      results.replaceChildren(h('h2', { class: 'arr-h' }, `Results for “${term}”`),
+        items.length ? h('div', { class: 'arr-grid' }, items.map(lookupCard)) : h('p', { class: 'dur' }, 'Nothing found. Try a different spelling.'));
+    } catch (e) { results.replaceChildren(h('p', { class: 'error' }, e.message)); }
   }
-  function lookupRow(it) {
+  function lookupCard(it) {
     const id = it.source === 'Radarr' ? it.tmdbId : it.tvdbId;
-    const btn = h('button', { class: 'btn glass small', type: 'button', disabled: it.inLibrary || !id ? true : null, onclick: () => addDialog(it, id, () => { btn.replaceWith(h('span', { class: 'badge-s ok' }, 'Added')); loadQueue(); }) },
-      it.inLibrary ? 'Already added' : 'Add');
-    return h('div', { class: 'hit static' }, h('span', { class: 'hit-text' }, h('strong', {}, it.title, it.year ? ` (${it.year})` : '', ' ', h('span', { class: 'badge-s' }, it.source === 'Radarr' ? 'Movie' : 'Show')),
-      h('small', {}, it.overview || 'No description')), btn);
+    const action = h('div', { class: 'arr-act' });
+    const showAdded = (text) => action.replaceChildren(h('span', { class: 'badge-s ok' }, icon('check'), text));
+    if (it.inLibrary) showAdded('Already added');
+    else if (!id) action.append(h('span', { class: 'dur' }, 'Can’t be added'));
+    else action.append(h('button', { class: 'btn small', type: 'button', onclick: () => addDialog(it, id, () => { showAdded('Added'); loadQueue(); }) }, icon('plus'), 'Add'));
+    return h('article', { class: 'arr-card' },
+      h('div', { class: 'arr-frame' }, arrPoster(it.title, it.poster),
+        h('span', { class: 'arr-kind' }, it.source === 'Radarr' ? 'Movie' : 'Show'),
+        it.rating ? h('span', { class: 'arr-rating' }, '★ ', it.rating) : null),
+      h('div', { class: 'arr-meta' }, h('div', { class: 't', title: it.title }, it.title), h('div', { class: 's' }, [it.year, it.status && it.source === 'Sonarr' ? it.status : null].filter(Boolean).join(' · ') || ' '), action));
   }
 
   async function loadQueue() {
     try {
       const { items } = await api('/api/arr/queue');
       if (!queue.isConnected) return;
-      queue.replaceChildren(h('h3', {}, `Downloading (${items.length})`), ...(items.length ? items.map((q) => h('div', { class: 'stream col' },
-        h('div', { class: 'row-split' }, h('div', {}, h('b', {}, q.title), q.detail ? h('span', { class: 'dur' }, ` · ${q.detail}`) : null),
-          h('span', { class: q.problem ? 'badge-s bad' : 'badge-s' }, q.state)),
-        h('div', { class: 'meter', role: 'progressbar', 'aria-valuenow': Math.round(q.percent), 'aria-valuemin': 0, 'aria-valuemax': 100 }, h('i', { style: `width:${q.percent}%` })),
-        h('div', { class: 'dur' }, `${Math.round(q.percent)}%${q.timeLeft && q.timeLeft !== '00:00:00' ? ` · ${q.timeLeft} left` : ''} · ${q.source}${q.problem ? ` · ${q.problem}` : ''}`)))
-        : [h('p', { class: 'dur' }, 'Nothing is downloading.')]));
-    } catch (e) { if (queue.isConnected) queue.replaceChildren(h('h3', {}, 'Downloading'), h('p', { class: 'error' }, e.message)); }
+      counts.queue = items.length; paintSummary();
+      queue.replaceChildren(h('h2', { class: 'arr-h' }, 'Downloading'), items.length
+        ? h('div', { class: 'arr-queue' }, items.map((q) => h('article', { class: 'arr-dl' },
+          arrPoster(q.title, q.poster, 'sm'),
+          h('div', { class: 'arr-dl-body' },
+            h('div', { class: 'row-split' }, h('div', { class: 'arr-dl-title' }, h('b', {}, q.title), q.detail ? h('span', { class: 'dur' }, ` · ${q.detail}`) : null),
+              h('span', { class: q.problem ? 'badge-s bad' : 'badge-s' }, q.state)),
+            h('div', { class: 'meter', role: 'progressbar', 'aria-label': q.title, 'aria-valuenow': Math.round(q.percent), 'aria-valuemin': 0, 'aria-valuemax': 100 }, h('i', { style: `width:${q.percent}%` })),
+            h('div', { class: 'dur' }, `${Math.round(q.percent)}%${q.timeLeft && q.timeLeft !== '00:00:00' ? ` · ${q.timeLeft} left` : ''} · ${q.source}`),
+            q.problem ? h('div', { class: 'arr-problem' }, q.problem) : null))))
+        : h('p', { class: 'dur arr-empty' }, 'Nothing is downloading right now.'));
+    } catch (e) { if (queue.isConnected) queue.replaceChildren(h('h2', { class: 'arr-h' }, 'Downloading'), h('p', { class: 'error' }, e.message)); }
   }
   async function loadUpcoming() {
     try {
       const { items } = await api('/api/arr/upcoming?days=21');
-      upcoming.replaceChildren(h('h3', {}, 'Coming up · next 3 weeks'), ...(items.length ? items.map((u) => h('div', { class: 'stream' },
-        h('div', {}, h('b', {}, u.title), u.detail ? h('span', { class: 'dur' }, ` · ${u.detail}`) : null, h('div', { class: 'dur' }, `${arrDate(u.date)} · ${u.source}`)),
-        u.hasFile ? h('span', { class: 'badge-s ok' }, 'In library') : null)) : [h('p', { class: 'dur' }, 'Nothing is scheduled in the next three weeks.')]));
-    } catch (e) { upcoming.replaceChildren(h('h3', {}, 'Coming up'), h('p', { class: 'error' }, e.message)); }
+      counts.upcoming = items.length; paintSummary();
+      upcoming.replaceChildren(h('h2', { class: 'arr-h' }, 'Coming up', h('small', {}, ' next 3 weeks')), items.length
+        ? h('div', { class: 'arr-rail' }, items.map((u) => h('article', { class: 'arr-card rail' },
+          h('div', { class: 'arr-frame' }, arrPoster(u.title, u.poster), h('span', { class: 'arr-date' }, arrWhen(u.date)), u.hasFile ? h('span', { class: 'arr-have' }, icon('check'), 'In library') : null),
+          h('div', { class: 'arr-meta' }, h('div', { class: 't', title: u.title }, u.title), h('div', { class: 's' }, u.detail || ' '), h('div', { class: 's' }, u.source)))))
+        : h('p', { class: 'dur arr-empty' }, 'Nothing is scheduled in the next three weeks.'));
+    } catch (e) { upcoming.replaceChildren(h('h2', { class: 'arr-h' }, 'Coming up'), h('p', { class: 'error' }, e.message)); }
   }
+  paintSummary();
   await Promise.all([loadQueue(), loadUpcoming()]);
   if (input.value) find();
   const t = setInterval(() => { if (queue.isConnected) loadQueue(); }, 8000);
@@ -81,13 +126,14 @@ function addDialog(it, id, onDone) {
   const kind = it.source.toLowerCase();
   const profile = h('select', { class: 'sort', 'aria-label': 'Quality profile' }), folder = h('select', { class: 'sort', 'aria-label': 'Folder' });
   const status = h('p', { class: 'dur' }, 'Loading options…');
-  const go = h('button', { class: 'btn', type: 'button', disabled: true }, 'Add and search');
+  const go = h('button', { class: 'btn', type: 'button', disabled: true }, icon('plus'), 'Add and search');
   const close = () => { document.removeEventListener('keydown', onKey); dlg.remove(); };
   const onKey = (e) => { if (e.key === 'Escape') close(); };
   const dlg = h('div', { class: 'dlg-backdrop', onclick: (e) => { if (e.target === dlg) close(); } },
-    h('div', { class: 'dlg', role: 'dialog', 'aria-modal': 'true', 'aria-label': `Add ${it.title}` },
-      h('h2', {}, `Add ${it.title}${it.year ? ` (${it.year})` : ''}`),
-      h('p', { class: 'dur' }, `${it.source} will look for it straight away, and it appears in your library once it’s downloaded and imported.`),
+    h('div', { class: 'dlg arr-add', role: 'dialog', 'aria-modal': 'true', 'aria-label': `Add ${it.title}` },
+      h('div', { class: 'arr-add-top' }, arrPoster(it.title, it.poster, 'md'),
+        h('div', {}, h('h2', {}, it.title), h('p', { class: 'dur' }, [it.year, it.source === 'Radarr' ? 'Movie' : 'Show', it.rating ? `★ ${it.rating}` : null].filter(Boolean).join(' · ')),
+          h('p', { class: 'arr-over' }, it.overview || 'No description.'))),
       field('Quality', null, profile), field('Save in', null, folder), status,
       h('div', { class: 'dlg-actions' }, go, h('button', { class: 'btn glass small', type: 'button', onclick: close }, 'Cancel'))));
   document.body.append(dlg);
@@ -96,7 +142,7 @@ function addDialog(it, id, onDone) {
     profile.replaceChildren(...o.profiles.map((p) => h('option', { value: p.id }, p.name)));
     folder.replaceChildren(...o.folders.map((f) => h('option', { value: f.name }, f.name)));
     const ok = o.profiles.length && o.folders.length;
-    status.textContent = ok ? '' : `${it.source} has no ${o.profiles.length ? 'root folder' : 'quality profile'} yet. Set one up there first.`;
+    status.textContent = ok ? `${it.source} will look for it straight away. It appears in your library once it’s downloaded and imported.` : `${it.source} has no ${o.profiles.length ? 'root folder' : 'quality profile'} yet. Set one up there first.`;
     go.disabled = !ok;
   }).catch((e) => { status.textContent = e.message; status.className = 'error'; });
   go.addEventListener('click', async () => {

@@ -12,9 +12,9 @@ public sealed class ArrException(string message, HttpStatusCode? status = null) 
     public HttpStatusCode? Status { get; } = status;
 }
 
-public sealed record ArrQueueItem(string Source, string Title, string? Detail, string State, double Percent, string? TimeLeft, string? Problem);
-public sealed record ArrUpcoming(string Source, string Title, string? Detail, string Date, bool HasFile, bool Monitored);
-public sealed record ArrLookupItem(string Source, string Title, int? Year, string? Overview, int? TmdbId, int? TvdbId, bool InLibrary);
+public sealed record ArrQueueItem(string Source, string Title, string? Detail, string State, double Percent, string? TimeLeft, string? Problem, string? Poster = null);
+public sealed record ArrUpcoming(string Source, string Title, string? Detail, string Date, bool HasFile, bool Monitored, string? Poster = null);
+public sealed record ArrLookupItem(string Source, string Title, int? Year, string? Overview, int? TmdbId, int? TvdbId, bool InLibrary, string? Poster = null, double? Rating = null, string? Status = null);
 public sealed record ArrOption(int Id, string Name);
 public sealed record ArrOptions(IReadOnlyList<ArrOption> Profiles, IReadOnlyList<ArrOption> Folders);
 
@@ -98,7 +98,8 @@ public sealed class ArrService(HttpClient http, IConfiguration config)
                 var warn = (string?)r["errorMessage"] ?? (r["statusMessages"] is JsonArray { Count: > 0 } sm ? (string?)sm[0]?["messages"]?[0] : null);
                 var bad = string.Equals((string?)r["trackedDownloadStatus"], "error", StringComparison.OrdinalIgnoreCase) || string.Equals((string?)r["status"], "failed", StringComparison.OrdinalIgnoreCase);
                 items.Add(new ArrQueueItem(Name(k), title ?? (string?)r["title"] ?? "Download", detail, State((string?)r["trackedDownloadState"], (string?)r["status"]),
-                    size > 0 ? Math.Round(Math.Clamp(1 - left / size, 0, 1) * 100, 1) : 0, (string?)r["timeleft"], bad || warn is not null ? warn ?? "Something went wrong" : null));
+                    size > 0 ? Math.Round(Math.Clamp(1 - left / size, 0, 1) * 100, 1) : 0, (string?)r["timeleft"], bad || warn is not null ? warn ?? "Something went wrong" : null,
+                    ArrArt.PosterPath(k == ArrKind.Radarr ? r["movie"]?["images"] : r["series"]?["images"])));
             }
         }
         return items;
@@ -121,7 +122,7 @@ public sealed class ArrService(HttpClient http, IConfiguration config)
             {
                 if (e is null || (string?)e["airDateUtc"] is not { } date) continue;
                 items.Add(new ArrUpcoming("Sonarr", (string?)e["series"]?["title"] ?? "Episode", $"S{(int?)e["seasonNumber"]}E{(int?)e["episodeNumber"]} · {(string?)e["title"]}",
-                    date, (bool?)e["hasFile"] ?? false, (bool?)e["monitored"] ?? true));
+                    date, (bool?)e["hasFile"] ?? false, (bool?)e["monitored"] ?? true, ArrArt.PosterPath(e["series"]?["images"])));
             }
         if (IsConfigured(ArrKind.Radarr))
             foreach (var m in (await SendAsync(ArrKind.Radarr, HttpMethod.Get, $"calendar?{range}&unmonitored=false", null, ct))?.AsArray() ?? [])
@@ -131,7 +132,7 @@ public sealed class ArrService(HttpClient http, IConfiguration config)
                 var which = new[] { ("digitalRelease", "Digital release"), ("physicalRelease", "Disc release"), ("inCinemas", "In cinemas") }
                     .Select(x => (Date: (string?)m[x.Item1], Label: x.Item2)).Where(x => x.Date is not null && string.CompareOrdinal(x.Date![..10], from.ToString("yyyy-MM-dd")) >= 0 && string.CompareOrdinal(x.Date[..10], to.ToString("yyyy-MM-dd")) <= 0).FirstOrDefault();
                 if (which.Date is null) continue;
-                items.Add(new ArrUpcoming("Radarr", Title((string?)m["title"], (int?)m["year"]) ?? "Movie", which.Label, which.Date, (bool?)m["hasFile"] ?? false, (bool?)m["monitored"] ?? true));
+                items.Add(new ArrUpcoming("Radarr", Title((string?)m["title"], (int?)m["year"]) ?? "Movie", which.Label, which.Date, (bool?)m["hasFile"] ?? false, (bool?)m["monitored"] ?? true, ArrArt.PosterPath(m["images"])));
             }
         return items.OrderBy(i => i.Date, StringComparer.Ordinal).ToList();
     }
@@ -149,7 +150,8 @@ public sealed class ArrService(HttpClient http, IConfiguration config)
                 if (r is null || (string?)r["title"] is not { } title) continue;
                 var overview = (string?)r["overview"];
                 items.Add(new ArrLookupItem(Name(k), title, (int?)r["year"] is > 0 and var y ? y : null, overview is { Length: > 280 } ? overview[..280] + "…" : overview,
-                    (int?)r["tmdbId"] is > 0 and var t ? t : null, (int?)r["tvdbId"] is > 0 and var v ? v : null, ((int?)r["id"] ?? 0) > 0));
+                    (int?)r["tmdbId"] is > 0 and var t ? t : null, (int?)r["tvdbId"] is > 0 and var v ? v : null, ((int?)r["id"] ?? 0) > 0,
+                    ArrArt.PosterPath(r["images"]), Rating(r["ratings"]), (string?)r["status"]));
             }
         }
         return items;
@@ -186,6 +188,13 @@ public sealed class ArrService(HttpClient http, IConfiguration config)
             item["addOptions"] = new JsonObject { ["monitor"] = "all", ["searchForMissingEpisodes"] = true, ["searchForCutoffUnmetEpisodes"] = false };
         }
         await SendAsync(k, HttpMethod.Post, k == ArrKind.Radarr ? "movie" : "series", item, ct);
+    }
+
+    /// <summary>Radarr nests the score under the site it came from, Sonarr has a single value. Out of 10; 0 means "no votes".</summary>
+    private static double? Rating(JsonNode? ratings)
+    {
+        var v = (double?)ratings?["value"] ?? (double?)ratings?["tmdb"]?["value"] ?? (double?)ratings?["imdb"]?["value"];
+        return v is > 0 ? Math.Round(v.Value, 1) : null;
     }
 
     private static string? Title(string? title, int? year) => title is null ? null : year is > 0 ? $"{title} ({year})" : title;

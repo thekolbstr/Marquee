@@ -95,6 +95,18 @@ public static class ArrEndpoints
             Kind(body.Source) is not { } k || body.Id <= 0 || string.IsNullOrWhiteSpace(body.RootFolder) ? Task.FromResult(Results.BadRequest(new { error = "Choose a title, a quality and a folder" }))
                 : Run(async () => { await arr.AddAsync(k, body.Id, body.QualityProfileId, body.RootFolder!, ct); return Results.Ok(new { added = true }); }));
 
+        api.MapGet("/art", async (string? u, ArrArt art, HttpContext ctx, CancellationToken ct) =>
+        {
+            if (u is null || ArrArt.Allowed(u) is null) return Results.NotFound();
+            try
+            {
+                if (await art.GetAsync(u, ct) is not { } hit) return Results.NotFound();
+                ctx.Response.Headers.CacheControl = "private, max-age=604800";
+                return Results.File(hit.File, hit.ContentType);
+            }
+            catch (HttpRequestException) { return Results.StatusCode(StatusCodes.Status502BadGateway); }
+        });
+
         // Called by Radarr/Sonarr themselves, with no cookie: the token in the address is the credential (see AuthMiddleware).
         app.MapPost("/api/arr/webhook/{token}", async (string token, HttpContext ctx, ArrWebhook hook, ScanCoordinator scans, IHostApplicationLifetime life) =>
         {

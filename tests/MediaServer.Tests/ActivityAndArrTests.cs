@@ -169,6 +169,7 @@ public sealed class ArrServiceTests
         Assert.Equal(("Radarr", "Big Film (2020)", "Downloading", 75.0, "00:12:00", (string?)null), (q[0].Source, q[0].Title, q[0].State, q[0].Percent, q[0].TimeLeft, q[0].Problem));
         Assert.Equal(("A Show", "S2E5 · Five", "No files found"), (q[1].Title, q[1].Detail, q[1].Problem));
         Assert.Contains("includeMovie=true", stub.Requests[0].RequestUri!.Query);
+        Assert.Null(q[0].Poster);
     }
 
     [Fact] public async Task Upcoming_UsesTheHomeReleaseDate_AndSortsByDate()
@@ -293,5 +294,62 @@ public sealed class ArrEndpointTests : IDisposable
         var admin = await _f.SignedIn("alex");
         var r = await admin.GetFromJsonAsync<JsonElement>("/api/system/activity?days=7");
         Assert.Equal(7, r.GetProperty("days").GetInt32()); Assert.Equal(7, r.GetProperty("perDay").GetArrayLength());
+    }
+}
+
+public sealed class ArrArtTests
+{
+    [Theory]
+    [InlineData("https://image.tmdb.org/t/p/w342/abcDEF123.jpg", true)]
+    [InlineData("https://artworks.thetvdb.com/banners/posters/12345-1.jpg", true)]
+    [InlineData("http://image.tmdb.org/t/p/w342/abc.jpg", false)]                 // not https
+    [InlineData("https://evil.example/t/p/w342/abc.jpg", false)]                  // not an artwork site
+    [InlineData("https://image.tmdb.org.evil.example/abc.jpg", false)]
+    [InlineData("https://user@image.tmdb.org/abc.jpg", false)]
+    [InlineData("https://image.tmdb.org:8443/abc.jpg", false)]
+    [InlineData("https://image.tmdb.org/abc.jpg?x=1", false)]
+    [InlineData("https://image.tmdb.org/abc.html", false)]
+    [InlineData("file:///etc/passwd", false)]
+    [InlineData("", false)]
+    public void OnlyHttpsPicturesOnTheArtworkSites_AreFetched(string url, bool allowed) => Assert.Equal(allowed, ArrArt.Allowed(url) is not null);
+
+    [Fact] public void DotDotSegments_AreResolvedBeforeAnyRequest_SoTheyCannotLeaveTheArtworkSite()
+        => Assert.Equal("https://image.tmdb.org/etc/passwd.jpg", ArrArt.Allowed("https://image.tmdb.org/t/p/../../etc/passwd.jpg")!.AbsoluteUri);
+
+    [Fact] public void PosterPath_PicksThePosterAndAsksForASmallerSize()
+    {
+        var images = JsonNode.Parse("""[{"coverType":"fanart","remoteUrl":"https://image.tmdb.org/t/p/original/fan.jpg"},{"coverType":"poster","remoteUrl":"https://image.tmdb.org/t/p/original/poster1.jpg"}]""");
+        var path = ArrArt.PosterPath(images)!;
+        Assert.StartsWith("/api/arr/art?u=", path);
+        Assert.Equal("https://image.tmdb.org/t/p/w342/poster1.jpg", Uri.UnescapeDataString(path["/api/arr/art?u=".Length..]));
+        Assert.Null(ArrArt.PosterPath(JsonNode.Parse("""[{"coverType":"poster","remoteUrl":"https://evil.example/p.jpg"}]""")));
+        Assert.Null(ArrArt.PosterPath(null));
+    }
+
+    [Fact] public async Task TheArtwork_IsFetchedOnceAndThenServedFromDisk()
+    {
+        var dir = Directory.CreateTempSubdirectory("art").FullName;
+        try
+        {
+            var stub = new StubHandler(_ => new HttpResponseMessage(HttpStatusCode.OK) { Content = new ByteArrayContent([1, 2, 3]) { Headers = { ContentType = new("image/jpeg") } } });
+            var art = new ArrArt(new HttpClient(stub), new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?> { ["Images:CacheDir"] = dir }).Build());
+            var url = "https://image.tmdb.org/t/p/w342/abcDEF123.jpg";
+            var first = await art.GetAsync(url, default); var second = await art.GetAsync(url, default);
+            Assert.Equal("image/jpeg", first!.Value.ContentType);
+            Assert.Equal(new byte[] { 1, 2, 3 }, await File.ReadAllBytesAsync(second!.Value.File));
+            Assert.Single(stub.Requests);
+            Assert.Null(await art.GetAsync("https://evil.example/a.jpg", default));
+            Assert.Single(stub.Requests);                                                         // never even asked
+        }
+        finally { try { Directory.Delete(dir, true); } catch (IOException) { } }
+    }
+
+    [Fact] public async Task ThePageCannotUseTheArtworkRouteToReachOtherSites()
+    {
+        using var f = new AuthFixture();
+        var admin = await f.SignedIn("alex");
+        Assert.Equal(HttpStatusCode.NotFound, (await admin.GetAsync("/api/arr/art?u=" + Uri.EscapeDataString("https://evil.example/a.jpg"))).StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, (await admin.GetAsync("/api/arr/art")).StatusCode);
+        Assert.Equal(HttpStatusCode.Unauthorized, (await f.Client().GetAsync("/api/arr/art?u=x")).StatusCode);
     }
 }
