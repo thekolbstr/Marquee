@@ -42,7 +42,7 @@ const skipSeconds = () => Math.min(60, Math.max(5, parseInt(pref('skip'), 10) ||
 // ================================================================ the page
 const SECTIONS = [
   ['appearance', 'Appearance', 'device'], ['home', 'Home page', 'device'], ['playback', 'Playback', 'device'], ['captions', 'Captions', 'device'], ['shortcuts', 'Keyboard shortcuts', 'device'],
-  ['general', 'General', 'server'], ['users', 'People', 'server'], ['library', 'Library', 'server'], ['metadata', 'Posters & details', 'server'], ['streaming', 'Streaming & playback', 'server'], ['livetv', 'Live TV & recording', 'server'],
+  ['general', 'General', 'server'], ['users', 'People', 'server'], ['activity', 'Watch activity', 'server'], ['library', 'Library', 'server'], ['metadata', 'Posters & details', 'server'], ['streaming', 'Streaming & playback', 'server'], ['livetv', 'Live TV & recording', 'server'], ['downloads', 'Downloads', 'server'],
   ['network', 'Network & security', 'server'], ['maintenance', 'Maintenance', 'server'], ['logs', 'Logs', 'server'], ['system', 'System & about', 'server'],
   ['account', 'Account & devices', 'account'],
 ];
@@ -66,6 +66,7 @@ async function showSettings(section) {
   else if (current === 'shortcuts') shortcutsPanel(body);
   else if (current === 'account') await accountPanel(body);
   else if (current === 'users') await usersPanel(body);
+  else if (current === 'activity') await activityPanel(body);
   else if (current === 'maintenance') maintenancePanel(body);
   else if (current === 'logs') await logsPanel(body);
   else if (current === 'system') await systemPanel(body);
@@ -208,6 +209,7 @@ async function serverPanel(body, groupId) {
     }
     pending.clear();
     toast('Saved');
+    if (groupId === 'downloads') await loadArrStatus();
     await refreshApp();   // the server name and the transcoding switch change what the whole page shows
     await showSettings(groupId); // redraw with what the server now has
   }
@@ -218,6 +220,7 @@ async function serverPanel(body, groupId) {
     const out = h('span', { class: 'save-status' });
     tools.push(h('button', { class: 'btn glass', type: 'button', onclick: async () => { out.textContent = 'Testing…'; try { const r = await (await fetch('/api/settings/test/tmdb', { method: 'POST' })).json(); out.textContent = r.message; out.className = 'save-status ' + (r.ok ? 'good' : 'bad'); } catch { out.textContent = 'Could not reach the server'; } } }, 'Test connection'), out);
   }
+  if (groupId === 'downloads') tools.push(...downloadsTools());
   if (groupId === 'livetv') {
     const out = h('span', { class: 'save-status' });
     tools.push(h('button', { class: 'btn glass', type: 'button', onclick: async () => {

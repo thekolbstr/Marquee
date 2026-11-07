@@ -219,7 +219,7 @@ async function route() {
   document.title = APP.name;
   const { parts, params } = parseHash();
   const [page, arg] = parts;
-  const section = !page ? 'home' : page === 'movies' || page === 'movie' ? 'movies' : page === 'shows' || page === 'series' ? 'shows' : page === 'live' ? 'live' : page === 'mylist' ? 'mylist' : page === 'recordings' ? 'recordings' : '';
+  const section = !page ? 'home' : page === 'movies' || page === 'movie' ? 'movies' : page === 'shows' || page === 'series' ? 'shows' : page === 'live' ? 'live' : page === 'mylist' ? 'mylist' : page === 'recordings' ? 'recordings' : page === 'downloads' ? 'downloads' : '';
   document.querySelectorAll('#nav a').forEach((a) => a.classList.toggle('active', a.dataset.route === section));
   if (page !== 'search') $('#search').value = '';
   else if (document.activeElement !== $('#search')) $('#search').value = arg || '';
@@ -234,6 +234,7 @@ async function route() {
     else if (page === 'settings') await showSettings(arg);
     else if (page === 'mylist') await showMyList();
     else if (page === 'recordings') await showRecordings();
+    else if (page === 'downloads') await showDownloads(params);
     else if (page === 'welcome') await showWelcome();
     else if (page === 'live') { if (arg) await showLivePlayer(parseInt(arg, 10)); else await showLive(); }
     else if (page === 'movie' && arg) await showMovie(arg);
@@ -464,7 +465,8 @@ async function showList({ type, title, query, matched }) {
   const randomBtn = type ? h('button', { class: 'btn glass small', type: 'button', onclick: () => surprise(type === 'series' ? 'episode' : 'movie', genre) }, icon('dice'), type === 'series' ? 'Random episode' : 'Random movie') : null;
   const viewBox = h('div', { class: 'seg hidden', role: 'group', 'aria-label': 'View' });
   const intro = matched === false ? h('p', { class: 'dur' }, 'Open a title and choose “Fix match” to pick the right entry from TMDB.') : null;
-  setView(h('div', { class: 'page' }, h('div', { class: 'page-head' }, h('h1', {}, title), countEl, randomBtn, viewBox, genreSel, select), intro, grid, sentinel));
+  const addHint = query && (arrInfo.radarr || arrInfo.sonarr) ? h('p', { class: 'hint' }, 'Can’t find it? ', h('a', { href: `#/downloads?q=${encodeURIComponent(query)}`, style: 'text-decoration:underline' }, 'Search Radarr and Sonarr to add it')) : null;
+  setView(h('div', { class: 'page' }, h('div', { class: 'page-head' }, h('h1', {}, title), countEl, randomBtn, viewBox, genreSel, select), intro, addHint, grid, sentinel));
 
   let offset = 0, total = Infinity, loading = false, gen = 0;
   const loaded = [];
@@ -753,6 +755,7 @@ function startApp() {
   route();
   api('/api/library/status').then((s) => { if (s.scanning) watchScan(false); }).catch(() => {});
   loadLiveStatus(); // reveals the Live TV link when a source is configured
+  loadArrStatus();  // ...and Downloads, when Radarr or Sonarr is
 }
 
 // Decide what to show first: the one-time setup, the sign-in form, or the app.

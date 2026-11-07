@@ -478,3 +478,24 @@ pre.codes { background: var(--bg); border: 1px solid var(--line); border-radius:
 .art .leftlabel { position: absolute; left: 8px; bottom: 11px; z-index: 2; padding: 2px 8px; border-radius: 6px; background: rgba(0,0,0,.72); color: #fff; font-size: .72rem; font-weight: 700; letter-spacing: .01em; backdrop-filter: blur(4px); }
 .art .seen { position: absolute; top: 8px; right: 8px; z-index: 2; width: 24px; height: 24px; border-radius: 50%; background: rgba(0,0,0,.65); color: var(--good); display: grid; place-items: center; }
 .art .seen svg { width: 14px; height: 14px; }
+
+/* ---- watch activity */
+.stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 12px; margin: 10px 0 16px; max-width: 760px; }
+.stat { display: flex; flex-direction: column; gap: 2px; padding: 14px 16px; border-radius: var(--radius); background: var(--surface); border: 1px solid var(--line); }
+.stat b { font-size: 1.6rem; line-height: 1.1; } .stat span { color: var(--muted); font-size: .85rem; }
+.bars { display: flex; align-items: flex-end; gap: 3px; height: 150px; padding-bottom: 18px; }
+.bar-col { position: relative; flex: 1 1 0; min-width: 0; height: 100%; display: flex; align-items: flex-end; }
+.bar-col i { display: block; width: 100%; border-radius: 3px 3px 0 0; background: linear-gradient(180deg, var(--accent), var(--accent-2)); min-height: 0; }
+.bar-col small { position: absolute; top: calc(100% + 3px); left: 50%; transform: translateX(-50%); color: var(--muted); font-size: .66rem; white-space: nowrap; }
+.set-body .panel, .page .panel { max-width: 760px; }
+
+/* ---- downloads */
+.stream.col { flex-direction: column; align-items: stretch; gap: 6px; }
+.row-split { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+.meter { height: 6px; border-radius: 99px; background: var(--surface-2); overflow: hidden; }
+.meter i { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg, var(--accent), var(--accent-2)); }
+.hit.static { cursor: default; align-items: center; justify-content: space-between; }
+.hit.static:hover { background: none; border-color: transparent; }
+.hit.static .hit-text { flex: 1; min-width: 0; }
+.find { min-height: 0; margin-top: 10px; }
+.hook { margin-top: 10px; } .hook .dlg-input { flex: 1; min-width: 0; }

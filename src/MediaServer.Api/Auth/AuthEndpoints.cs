@@ -218,6 +218,8 @@ public sealed class AuthMiddleware(RequestDelegate next)
 
         // Capability links: an HLS session id (created by a signed-in user, 128 random bits) or a signed direct-play token for that one file.
         if (System.Text.RegularExpressions.Regex.IsMatch(path.Value ?? "", "^/api/hls/[0-9a-f]{32}/")) { await next(ctx); return; }
+        // Radarr/Sonarr announcing an import: the token in the address is checked by the endpoint.
+        if (HttpMethods.IsPost(ctx.Request.Method) && System.Text.RegularExpressions.Regex.IsMatch(path.Value ?? "", "^/api/arr/webhook/[0-9a-f]{48}$")) { await next(ctx); return; }
         if (path.StartsWithSegments("/stream", out var sid) && long.TryParse(sid.Value?.TrimStart('/'), out var mediaId) && auth.CheckStreamToken(mediaId, ctx.Request.Query["k"])) { await next(ctx); return; }
 
         var user = auth.Validate(ctx.Request.Cookies[AuthService.CookieName]);
@@ -243,7 +245,7 @@ public sealed class AuthMiddleware(RequestDelegate next)
     internal static bool IsAdminOnly(HttpRequest req)
     {
         var p = req.Path;
-        if (p.StartsWithSegments("/api/settings") || p.StartsWithSegments("/api/maintenance") || p.StartsWithSegments("/api/system") || p.StartsWithSegments("/api/users")
+        if (p.StartsWithSegments("/api/settings") || p.StartsWithSegments("/api/maintenance") || p.StartsWithSegments("/api/system") || p.StartsWithSegments("/api/users") || p.StartsWithSegments("/api/arr")
             || p.StartsWithSegments("/api/fs") || p.StartsWithSegments("/api/library/folders") || p.StartsWithSegments("/api/live/refresh") || p.StartsWithSegments("/api/tmdb/search")) return true;
         // fixing a wrong TMDB match changes the shared library
         return (HttpMethods.IsPut(req.Method) || HttpMethods.IsDelete(req.Method)) && System.Text.RegularExpressions.Regex.IsMatch(p.Value ?? "", "^/api/media/\\d+/match$");

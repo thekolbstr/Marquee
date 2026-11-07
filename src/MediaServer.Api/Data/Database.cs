@@ -314,5 +314,19 @@ public static class Migrations
             PRIMARY KEY (list_id, channel_id)
         );
         """,
+        // v14: how much each person actually watched, per title per day (filled in from the progress heartbeats). Powers Settings -> Watch activity.
+        """
+        CREATE TABLE watch_activity (
+            user_id  INTEGER NOT NULL,
+            media_id INTEGER NOT NULL REFERENCES media_files(id) ON DELETE CASCADE,
+            day      TEXT    NOT NULL,          -- server-local date, yyyy-MM-dd
+            seconds  REAL    NOT NULL DEFAULT 0,
+            plays    INTEGER NOT NULL DEFAULT 0,
+            last_at  TEXT    NOT NULL,
+            PRIMARY KEY (user_id, media_id, day)
+        );
+        CREATE INDEX ix_activity_day ON watch_activity(day);
+        CREATE INDEX ix_activity_last ON watch_activity(last_at);
+        """,
     ];
 }

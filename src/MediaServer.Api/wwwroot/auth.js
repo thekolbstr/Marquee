@@ -149,7 +149,7 @@ function authLost() {
   AUTH.locked = true;
   runLeave(); teardownPlayer();
   document.body.classList.remove('watching');
-  showLogin(() => { AUTH.locked = false; document.body.classList.remove('auth-screen'); route(); loadLiveStatus(); }, 'Your session ended. Sign in again to continue.');
+  showLogin(() => { AUTH.locked = false; document.body.classList.remove('auth-screen'); route(); loadLiveStatus(); loadArrStatus(); }, 'Your session ended. Sign in again to continue.');
 }
 
 async function signOut() {

@@ -22,6 +22,7 @@ public sealed class ProgressService(Database db, TimeProvider time, IConfigurati
 
         using var c = db.Open();
         if (Database.Scalar(c, $"SELECT 1 FROM media_files WHERE id={mediaId.ToString(CultureInfo.InvariantCulture)}") is null) return false;
+        RecordActivity(c, mediaId, position);
         Database.Execute(c, null, """
             INSERT INTO media_progress(user_id, media_id, position_seconds, duration_seconds, watched, updated_at) VALUES(@u,@m,@p,@d,@w,@t)
             ON CONFLICT(user_id, media_id) DO UPDATE SET position_seconds=excluded.position_seconds,
@@ -29,6 +30,31 @@ public sealed class ProgressService(Database db, TimeProvider time, IConfigurati
             """, ("@u", UserId), ("@m", mediaId), ("@p", position), ("@d", duration), ("@w", isWatched ? 1 : 0), ("@t", time.GetUtcNow().ToString("O", CultureInfo.InvariantCulture)));
         return true;
     }
+
+    /// <summary>
+    /// Watch time comes from the player's heartbeats: how far the position moved since the previous one, capped by the time that passed (so
+    /// seeking forward doesn't count as watching). A heartbeat after a long gap, or the first for a title, starts a new "play".
+    /// </summary>
+    private void RecordActivity(Microsoft.Data.Sqlite.SqliteConnection c, long mediaId, double position)
+    {
+        var now = time.GetUtcNow();
+        var prev = Database.Query(c, "SELECT position_seconds, updated_at FROM media_progress WHERE user_id=@u AND media_id=@m",
+            r => (Pos: r.GetDouble(0), At: DateTimeOffset.TryParse(r.GetString(1), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var t) ? t : (DateTimeOffset?)null),
+            ("@u", UserId), ("@m", mediaId));
+        var gap = prev.Count > 0 && prev[0].At is { } at ? (now - at).TotalSeconds : double.PositiveInfinity;
+        var newPlay = gap > SessionGapSeconds || gap < 0;
+        var delta = prev.Count > 0 ? position - prev[0].Pos : 0;
+        var seconds = !newPlay && delta > 0 ? Math.Min(delta, gap * 2 + 1) : 0;   // up to 2x speed
+        if (!newPlay && seconds <= 0) return;
+        Database.Execute(c, null, """
+            INSERT INTO watch_activity(user_id, media_id, day, seconds, plays, last_at) VALUES(@u,@m,@day,@s,@p,@t)
+            ON CONFLICT(user_id, media_id, day) DO UPDATE SET seconds=seconds+excluded.seconds, plays=plays+excluded.plays, last_at=excluded.last_at
+            """, ("@u", UserId), ("@m", mediaId), ("@day", time.GetLocalNow().ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)), ("@s", seconds),
+            ("@p", newPlay ? 1 : 0), ("@t", now.ToString("O", CultureInfo.InvariantCulture)));
+    }
+
+    /// <summary>Heartbeats further apart than this (a paused tab, a closed player) end a play.</summary>
+    public const double SessionGapSeconds = 180;
 
     /// <summary>Marks a batch of files watched (position = the end) or, for <c>watched=false</c>, forgets their progress.</summary>
     public int SetWatched(IReadOnlyList<(long Id, double? Duration)> files, bool watched)

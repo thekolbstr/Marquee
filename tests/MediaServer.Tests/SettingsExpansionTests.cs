@@ -29,7 +29,7 @@ public sealed class SettingsCatalogTests
         Assert.All(SettingsService.Defs, d =>
         {
             Assert.False(string.IsNullOrWhiteSpace(d.Label)); Assert.False(string.IsNullOrWhiteSpace(d.Help));
-            Assert.Contains(d.Group, new[] { "general", "library", "metadata", "streaming", "livetv", "network" });
+            Assert.Contains(d.Group, new[] { "general", "library", "metadata", "streaming", "livetv", "downloads", "network" });
         });
         Assert.Equal(SettingsService.Defs.Count, SettingsService.Defs.Select(d => d.Key).Distinct(StringComparer.OrdinalIgnoreCase).Count());
     }

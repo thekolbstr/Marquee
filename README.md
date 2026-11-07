@@ -67,6 +67,11 @@ locations and the server's own data. `Library__AllowedRoots=/media;/mnt` limits 
 - **Live TV recording:** record from the guide (●) or while watching; recordings are plain files in `Recordings__Directory` (default `<data folder>/recordings`)
   and appear in the library like any title. Settings → Live TV & recording: how many at once, padding before/after, auto-delete. **Channel lists:** your own named groups.
 - **Install it as an app** (phone/desktop) from the browser menu; works over HTTPS or localhost.
+- **Watch activity** (Settings → Watch activity, administrators): who is watching right now, plus hours watched per day, per person and per title over the last 7, 30 or 90 days.
+  Time is counted from the player's own progress saves, so seeking ahead or leaving a video paused adds nothing.
+- **Radarr & Sonarr** (Settings → Downloads): save each app's address and API key (Sonarr v4), then use **Downloads** in the menu to see what's downloading, what's coming in the next
+  three weeks, and to search for a movie or show and add it with the quality and folder you choose. Add the webhook address shown in Settings to each app (Connect → Webhook, "On Import")
+  and new files appear in the library within seconds. A search that finds nothing offers to look in Radarr and Sonarr.
 - **Light, black and automatic themes.**
 
 ## Security notes

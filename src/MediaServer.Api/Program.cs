@@ -1,3 +1,4 @@
+using MediaServer.Api.Arr;
 using MediaServer.Api.Auth;
 using MediaServer.Api.Data;
 using MediaServer.Api.Hls;
@@ -42,6 +43,7 @@ builder.Services.AddSingleton(sp => new LiveTvService(sp.GetRequiredService<Data
 builder.Services.AddSingleton(sp => new LiveLogoCache(sp.GetRequiredKeyedService<HttpClient>("livetv"), sp.GetRequiredService<IConfiguration>(), sp.GetRequiredService<TimeProvider>()));
 builder.Services.AddHostedService<LiveTvRefreshService>();
 builder.Services.AddSingleton<ProgressService>();
+builder.Services.AddSingleton<ActivityService>();
 builder.Services.AddSingleton<WatchlistService>();
 builder.Services.AddSingleton<SecretBox>();
 builder.Services.AddHttpContextAccessor();
@@ -55,6 +57,8 @@ builder.Services.AddSingleton<ScanCoordinator>();
 builder.Services.AddHostedService<AutoScanService>();
 builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.AddHttpClient<TmdbClient>(c => c.Timeout = TimeSpan.FromSeconds(30)).RemoveAllLoggers(); // URLs may carry api_key
+builder.Services.AddHttpClient<ArrService>(c => c.Timeout = TimeSpan.FromSeconds(20)).RemoveAllLoggers();
+builder.Services.AddSingleton<ArrWebhook>();
 builder.Services.AddHttpClient<ImageCache>(c => c.Timeout = TimeSpan.FromSeconds(60));
 builder.Services.AddScoped<MetadataService>();
 builder.Services.AddSingleton(sp => HlsOptions.From(sp.GetRequiredService<IConfiguration>()));
@@ -156,6 +160,8 @@ app.MapMediaEndpoints();
 app.MapClientEventEndpoints();
 app.MapLiveTvEndpoints();
 app.MapSystemEndpoints();
+app.MapActivityEndpoints();
+app.MapArrEndpoints();
 app.MapHttpsEndpoints();
 app.MapSettingsEndpoints();
 app.MapRecordingEndpoints();

@@ -87,6 +87,12 @@ public sealed class SettingsService(Database db, DbSettingsProvider provider, IC
         new("Recordings:AfterSeconds", "livetv", "Keep recording afterwards for", "Live TV often runs over.", SettingKind.Int, 0, 3600, Default: "120", Unit: "seconds"),
         new("Recordings:KeepDays", "livetv", "Delete recordings after", "0 keeps them until you delete them yourself.", SettingKind.Int, 0, 3650, Default: "0", Unit: "days"),
 
+        // downloads (Radarr / Sonarr)
+        new("Radarr:Url", "downloads", "Radarr address", "Where Radarr (movies) runs, as this server sees it.", SettingKind.Url, Placeholder: "http://radarr:7878"),
+        new("Radarr:ApiKey", "downloads", "Radarr API key", "Radarr → Settings → General → API Key. It's never shown again once saved.", SettingKind.Secret),
+        new("Sonarr:Url", "downloads", "Sonarr address", "Where Sonarr (TV, version 4) runs, as this server sees it.", SettingKind.Url, Placeholder: "http://sonarr:8989"),
+        new("Sonarr:ApiKey", "downloads", "Sonarr API key", "Sonarr → Settings → General → API Key. It's never shown again once saved.", SettingKind.Secret),
+
         // network & security
         new("Cast:BaseUrl", "network", "Address for casting", "Optional. Cast devices (Chromecast) fetch the video themselves, so they need an address for this server that works from their side: plain http, not https. Leave empty to use the one you're browsing with.", SettingKind.Url, Placeholder: "http://192.0.2.10:8080"),
         new("Auth:SessionDays", "network", "“Keep me signed in” lasts", "How long a remembered sign-in stays valid. Applies to new sign-ins.", SettingKind.Int, 1, 365, Default: "30", Unit: "days"),
@@ -101,6 +107,7 @@ public sealed class SettingsService(Database db, DbSettingsProvider provider, IC
         ("metadata", "Posters & details", "Artwork, descriptions, ratings and episode info come from TMDB. It's free: create an account and copy a key."),
         ("streaming", "Streaming & playback", "How the server delivers video to your devices."),
         ("livetv", "Live TV", "Watch channels from any M3U playlist with an XMLTV guide, such as an IPTV service or Dispatcharr."),
+        ("downloads", "Downloads (Radarr & Sonarr)", "Connect your download managers to see what's coming, add titles from here, and have new files appear in the library as soon as they're imported."),
         ("network", "Network & security", "Sign-in sessions and how the server sees its visitors."),
     ];
 

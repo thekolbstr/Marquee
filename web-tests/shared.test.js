@@ -90,3 +90,15 @@ test('statsRows drops a "Why" that only repeats the mode', () => {
   assert.ok(!S.statsRows({ modeLabel: 'Direct play', reason: 'Direct play' }).some(([k]) => k === 'Why'));
   assert.ok(S.statsRows({ modeLabel: 'Direct stream', reason: 'the container isn’t playable' }).some(([k]) => k === 'Why'));
 });
+
+test('formatWatchTime', () => {
+  assert.equal(S.formatWatchTime(0), '0m'); assert.equal(S.formatWatchTime(20), '<1m'); assert.equal(S.formatWatchTime(600), '10m'); assert.equal(S.formatWatchTime(5400), '1h 30m');
+  assert.equal(S.formatWatchTime(7200), '2h'); assert.equal(S.formatWatchTime(90000), '25h');
+  for (const bad of [-1, NaN, Infinity, undefined, null]) assert.equal(S.formatWatchTime(bad), '0m', String(bad));
+});
+
+test('formatDay', () => {
+  const now = new Date(2026, 10, 6, 15, 0);
+  assert.equal(S.formatDay('2026-11-06', now), 'today'); assert.equal(S.formatDay('2026-11-05', now), 'yesterday');
+  assert.match(S.formatDay('2026-10-20', now), /20/); assert.equal(S.formatDay('nonsense', now), ''); assert.equal(S.formatDay(null, now), '');
+});

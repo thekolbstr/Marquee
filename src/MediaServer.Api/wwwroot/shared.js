@@ -38,6 +38,28 @@ function formatLeft(seconds) {
   return r ? `${r} left` : '';
 }
 
+/** Time spent watching: 45 → "<1m", 600 → "10m", 5400 → "1h 30m", 90000 → "25h". */
+function formatWatchTime(s) {
+  if (!Number.isFinite(s) || s <= 0) return '0m';
+  const m = Math.round(s / 60);
+  if (m < 1) return '<1m';
+  if (m < 60) return `${m}m`;
+  const hh = Math.floor(m / 60), mm = m % 60;
+  return hh >= 10 || !mm ? `${hh}h` : `${hh}h ${mm}m`;
+}
+
+/** An ISO date from the server → "today", "yesterday", or "Mon 3 Nov". `now` is injectable for tests. */
+function formatDay(day, now = new Date()) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(day || ''));
+  if (!m) return '';
+  const d = new Date(+m[1], +m[2] - 1, +m[3]);
+  const t = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const diff = Math.round((t - d) / 86400000);
+  if (diff === 0) return 'today';
+  if (diff === 1) return 'yesterday';
+  return d.toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' });
+}
+
 function formatBytes(n) {
   if (!Number.isFinite(n) || n < 0) return '—';
   if (n >= 1e9) return `${(n / 1e9).toFixed(1)} GB`;
@@ -120,5 +142,5 @@ function statsRows(d) {
 }
 
 if (typeof module !== 'undefined') {
-  module.exports = { langKey, formatClock, formatRuntime, formatLeft, formatBytes, formatBitrate, bufferAhead, trickplayCell, qualitiesFor, pickCaption, audioLabel, codecName, statsRows, QUALITIES };
+  module.exports = { langKey, formatClock, formatRuntime, formatLeft, formatWatchTime, formatDay, formatBytes, formatBitrate, bufferAhead, trickplayCell, qualitiesFor, pickCaption, audioLabel, codecName, statsRows, QUALITIES };
 }

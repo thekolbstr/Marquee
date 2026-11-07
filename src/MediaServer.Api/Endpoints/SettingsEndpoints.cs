@@ -1,4 +1,5 @@
 using System.Text.Json;
+using MediaServer.Api.Arr;
 using MediaServer.Api.Library;
 using MediaServer.Api.LiveTv;
 using MediaServer.Api.Metadata;
@@ -44,6 +45,12 @@ public static class SettingsEndpoints
         });
 
         // "Does it work?" buttons next to the fields.
+        app.MapPost("/api/settings/test/{app:regex(^(radarr|sonarr)$)}", async (string app, ArrService arr, CancellationToken ct) =>
+        {
+            var (ok, message) = await arr.PingAsync(Enum.Parse<ArrKind>(app, true), ct);
+            return Results.Ok(new { ok, message });
+        });
+
         app.MapPost("/api/settings/test/tmdb", async (TmdbClient tmdb, CancellationToken ct) =>
         {
             var (ok, message) = await tmdb.PingAsync(ct);

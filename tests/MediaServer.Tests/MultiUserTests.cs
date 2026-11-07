@@ -142,6 +142,7 @@ public sealed class UserManagementTests : IDisposable
     [InlineData("POST", "/api/library/folders")] [InlineData("GET", "/api/fs/browse")] [InlineData("POST", "/api/maintenance/optimize-database")] [InlineData("GET", "/api/maintenance/backup")]
     [InlineData("GET", "/api/system")] [InlineData("GET", "/api/system/logs")] [InlineData("POST", "/api/live/refresh")] [InlineData("GET", "/api/tmdb/search?type=movie&q=x")]
     [InlineData("PUT", "/api/media/1/match")] [InlineData("DELETE", "/api/media/1/match")] [InlineData("POST", "/api/settings/test/tmdb")]
+    [InlineData("GET", "/api/system/activity")] [InlineData("GET", "/api/arr/status")] [InlineData("GET", "/api/arr/queue")] [InlineData("POST", "/api/arr/add")] [InlineData("POST", "/api/settings/test/radarr")]
     public async Task OrdinaryPeople_CannotReachAdministration(string method, string url)
     {
         var (_, sam, _) = await TwoPeople();
