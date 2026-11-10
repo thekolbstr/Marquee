@@ -39,14 +39,23 @@ detail pages with season tabs, and a full-screen player (keyboard: space/k, j/l 
   browsers. "Up next" appears when the latest episode of a show is finished.
 - Safari plays HLS through its native player (HEVC in fMP4 needs it); other browsers use the bundled hls.js.
 
-## Run on Windows
+## Downloads (Windows, macOS, Linux)
 
-Download `Marquee-windows-x64.zip` from the [Releases](../../releases) page (it bundles the .NET runtime and ffmpeg, so there is nothing to install), unzip it somewhere you can write to
-(not Program Files), and double-click **Start-Marquee.bat**. Your browser opens http://localhost:8080; create the first account and add your media folders (for example `D:\Movies`).
-Allow it through Windows Firewall if you want other devices to connect. Data lives in the `data` folder next to the launcher; to update, unzip the new version over the old one and keep `data`.
+Grab the file for your system from the [Releases](../../releases) page. Each one bundles the .NET runtime, so there is nothing else to install.
 
-To build the zip yourself: `dotnet publish src/MediaServer.Api -c Release -r win-x64 --self-contained -o out/Marquee`, then copy `packaging/windows/*` next to the output and put `ffmpeg.exe` and `ffprobe.exe` in an `ffmpeg` folder there.
-The `windows` workflow does this on every `m*` tag and attaches the zip to the release.
+| System | File | ffmpeg |
+|---|---|---|
+| Windows 10/11 (x64) | `Marquee-windows-x64.zip` | bundled |
+| Linux x64 / arm64 | `Marquee-linux-x64.tar.gz`, `Marquee-linux-arm64.tar.gz` | bundled |
+| macOS Apple Silicon / Intel | `Marquee-macos-arm64.zip`, `Marquee-macos-x64.zip` | `brew install ffmpeg` once |
+
+Unpack it somewhere you can write to, then start it: **Start-Marquee.bat** on Windows, **Start-Marquee.command** (double-click) or `./start-marquee.sh` on macOS and Linux.
+Your browser opens http://localhost:8080; create the first account and add your media folders (for example `D:\Movies` or `/mnt/media`).
+Data lives in the `data` folder next to the launcher; to update, unpack the new version over the old one and keep `data`.
+Allow it through the firewall if you want other devices to connect. The macOS builds are unsigned, so the first launch may need right-click, Open (or `xattr -dr com.apple.quarantine <folder>`).
+
+To build one yourself: `dotnet publish src/MediaServer.Api -c Release -r <rid> --self-contained -o out/Marquee` (rid: `win-x64`, `linux-x64`, `linux-arm64`, `osx-arm64`, `osx-x64`),
+then copy `packaging/windows/*` or `packaging/unix/*` next to the output. The `package` workflow does this for every platform on each `m*` tag and attaches the files to the release.
 
 ## Quick start (Docker)
 

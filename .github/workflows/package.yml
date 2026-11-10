@@ -1,0 +1,80 @@
+name: package
+
+# Self-contained downloads for Windows, Linux and macOS. On an m* tag they are attached to that release.
+on:
+  push:
+    tags: ["m*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  package:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: windows-latest,   rid: win-x64,     name: Marquee-windows-x64 }
+          - { os: ubuntu-latest,    rid: linux-x64,   name: Marquee-linux-x64,   ffmpeg: linux64 }
+          - { os: ubuntu-24.04-arm, rid: linux-arm64, name: Marquee-linux-arm64, ffmpeg: linuxarm64 }
+          - { os: macos-latest,     rid: osx-arm64,   name: Marquee-macos-arm64 }
+          - { os: macos-15-intel,   rid: osx-x64,     name: Marquee-macos-x64 }
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+      - name: Publish (self-contained)
+        shell: bash
+        run: |
+          dotnet publish src/MediaServer.Api/MediaServer.Api.csproj -c Release -r ${{ matrix.rid }} --self-contained -o out/Marquee -p:DebugType=None -p:DebugSymbols=false
+          if [ "$RUNNER_OS" = Windows ]; then cp packaging/windows/* out/Marquee/; else cp packaging/unix/* out/Marquee/; chmod +x out/Marquee/MediaServer.Api out/Marquee/*.sh out/Marquee/*.command; fi
+      - name: Bundle ffmpeg (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          Invoke-WebRequest "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip" -OutFile ffmpeg.zip
+          Expand-Archive ffmpeg.zip -DestinationPath ffmpeg-extract
+          $bin = Get-ChildItem ffmpeg-extract -Recurse -Filter ffmpeg.exe | Select-Object -First 1 | ForEach-Object { $_.DirectoryName }
+          New-Item -ItemType Directory out/Marquee/ffmpeg | Out-Null
+          Copy-Item "$bin/ffmpeg.exe", "$bin/ffprobe.exe" out/Marquee/ffmpeg/
+      - name: Bundle ffmpeg (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          curl -fsSL "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-${{ matrix.ffmpeg }}-gpl.tar.xz" -o ffmpeg.tar.xz
+          mkdir ffmpeg-extract && tar -xJf ffmpeg.tar.xz -C ffmpeg-extract
+          mkdir out/Marquee/ffmpeg && cp ffmpeg-extract/*/bin/ffmpeg ffmpeg-extract/*/bin/ffprobe out/Marquee/ffmpeg/
+      - name: Install ffmpeg for the smoke test (macOS)
+        if: runner.os == 'macOS'
+        run: brew install ffmpeg
+      - name: Smoke test
+        shell: bash
+        run: |
+          export ASPNETCORE_URLS=http://127.0.0.1:8080 Database__Path="$PWD/smoke/db.sqlite"
+          EXE=out/Marquee/MediaServer.Api; [ "$RUNNER_OS" = Windows ] && EXE=out/Marquee/MediaServer.Api.exe
+          "$EXE" & PID=$!
+          ok=0; for i in $(seq 1 30); do curl -fs http://127.0.0.1:8080/health >/dev/null && { ok=1; break; }; sleep 1; done
+          kill $PID 2>/dev/null || true
+          [ $ok = 1 ] || { echo "server did not answer /health"; exit 1; }
+      - name: Archive
+        shell: bash
+        run: |
+          cd out
+          if [ "$RUNNER_OS" = Linux ]; then tar -czf "../${{ matrix.name }}.tar.gz" Marquee; echo "ASSET=${{ matrix.name }}.tar.gz" >> "$GITHUB_ENV"
+          elif [ "$RUNNER_OS" = macOS ]; then zip -qry "../${{ matrix.name }}.zip" Marquee; echo "ASSET=${{ matrix.name }}.zip" >> "$GITHUB_ENV"
+          else 7z a -tzip -bso0 "../${{ matrix.name }}.zip" Marquee; echo "ASSET=${{ matrix.name }}.zip" >> "$GITHUB_ENV"; fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.name }}
+          path: ${{ env.ASSET }}
+      - name: Attach to the release
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view "${{ github.ref_name }}" >/dev/null 2>&1 || gh release create "${{ github.ref_name }}" --title "${{ github.ref_name }}" --generate-notes
+          gh release upload "${{ github.ref_name }}" "$ASSET" --clobber
