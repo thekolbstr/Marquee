@@ -132,7 +132,7 @@ Marquee is one ASP.NET (.NET 10, Minimal APIs) process that serves a JSON API an
                                        ▼
                          your media files (read-only)
 
-- **Scanning.** The scanner walks each library folder, parses file names into titles, years, seasons and episodes (`FilenameParser`), and runs `ffprobe` once per new or changed file to record its container, codecs, tracks, chapters and duration. New, changed, moved and deleted files are detected on each scan, so a move is recognised rather than re-added. Everything lives in SQLite.
+- **Scanning.** Incremental and idempotent; see [How scanning works](#how-scanning-works).
 - **IDs, not paths.** Media is addressed by database ID. Clients never send a file path, so there is no path traversal surface and folders can be moved without breaking links.
 - **Metadata.** With a TMDB token, titles are matched once per distinct title (not per file). Responses are cached in SQLite (details 30 days, searches 2 days, misses 1 day, stale-if-error) and images on disk. Manual matches are never overwritten by automatic matching.
 - **Playback.** The browser reports what it can decode; the server picks the cheapest path per file (next section). Progress is saved on the server.
@@ -140,6 +140,24 @@ Marquee is one ASP.NET (.NET 10, Minimal APIs) process that serves a JSON API an
 - **Settings.** *This device* settings live in the browser; *Server* settings live in the database and apply to everyone immediately (no restart). Only whitelisted settings can be changed this way: library paths, tool paths, the database location and the sign-in switch stay deployment-only. Saved values override environment variables; "Use the default" removes the override.
 - **Background work** (all in-process): automatic scans, Live TV refresh, recording, the intro/credits finder, seek-preview generation and cache clean-up.
 - **Health.** `GET /health` (alive) and `GET /health/ready` (database reachable).
+
+### How scanning works
+
+A scan is a cheap comparison between what is on disk and what the database already knows. Only files that are new or changed are sent to `ffprobe`.
+
+1. **Walk the folders.** Every enabled library folder is walked recursively (the primary folder, any folders added in Settings, and the recordings folder). Only these extensions are considered: `.mkv .mp4 .m4v .avi .mov .webm .ts .m2ts .wmv .mpg .mpeg`. Hidden and system files, dot-folders and Synology `@eaDir` folders are skipped, and so is anything the **ignore rules** exclude: files below a minimum size (samples, trailers) or with one of your ignore words (`sample`, `extras`, `featurettes`…) in the folder or file name. A file that stops matching just drops out of the library on the next scan; nothing on disk is touched.
+2. **Compare with the database.** Each file is identified by its path and a *stamp* of size plus last-modified time:
+   - **Same path, same stamp:** unchanged. It is never re-probed (unless the probe parser has since learned new fields, in which case it is probed once more).
+   - **Same path, different stamp:** changed. It is re-probed and updated in place, keeping its ID, so watch history stays attached.
+   - **New path:** if a file that has vanished from another path has the same stamp, it is treated as a **move or rename** and keeps its ID (and so its progress, My List entries and manual TMDB match). If several candidates fit, one with the same file name wins; otherwise the first match is used. A file that was both moved and edited has a different stamp, so it shows up as a delete plus a new file.
+   - **Otherwise:** a new file, which gets probed and inserted.
+3. **Soft deletes.** Files that have disappeared are marked deleted, not erased, and are restored (same ID) if they come back at the same path with the same stamp. This is what makes an unplugged drive or a remounted share harmless: a folder that is unavailable is skipped and its files are left exactly as they are. The primary folder is stricter: if it is missing, the scan fails rather than emptying your library.
+4. **Probe in parallel.** New and changed files are probed concurrently (`Library:ProbeParallelism`, default 4, further bounded by the process runner). A file ffprobe can't read is still recorded, with its error, so one bad file never stops a scan and the problem is visible in the logs.
+5. **Write once.** All moves, restores, removals, inserts and updates are applied in a single SQLite transaction, then names are parsed (`FilenameParser`) into kind, title, year, season, episode and air date for new and moved rows, and for any row parsed by an older version of the parser. Recordings such as `News at Six [2026-11-06 1800].ts` are named from the file and never mistaken for a movie or an episode.
+
+Scans are serialised: only one runs at a time, and asking for another while one is running does nothing. They run independently of any web request, so a closed tab or proxy timeout never aborts one. After each scan Marquee fetches TMDB metadata for new titles (if a token is set) and, when anything was added, updated or moved, queues the intro and credits finder, since new episodes may now have neighbours to compare against. The result of the last scan (added, updated, moved, restored, removed, unchanged, probe errors) is shown in the web app and the logs.
+
+When scans happen: about 5 seconds after startup, then every `Library:ScanIntervalMinutes` (default 360; `0` means startup only), unless `Library:AutoScan=false`. These settings are re-read every cycle, so changing them in Settings takes effect without a restart. The refresh button, or `POST /api/library/scan`, scans on demand.
 
 ### Code map
 
