@@ -266,9 +266,10 @@ public sealed class CastService(IConfiguration config, HlsSessionManager hls, Su
             if (Interlocked.Exchange(ref _ended, 1) == 1) return;
             var last = conn.Media;
             _cts.Cancel();
-            owner._active.TryRemove(new KeyValuePair<string, ActiveCast>(device.Id, this));
             if (finished) SaveProgress(last?.Duration ?? stream.DurationSeconds, last?.Duration ?? stream.DurationSeconds, true);
             else if (last is { PlayerState: not "IDLE" } && last.PositionNow(owner.Clock.GetUtcNow()) > 5) SaveProgress(last.PositionNow(owner.Clock.GetUtcNow()), last.Duration, null);
+            // Only now does the cast disappear from the list, so anyone who sees it gone (the player page reloading, a test) finds the progress already saved.
+            owner._active.TryRemove(new KeyValuePair<string, ActiveCast>(device.Id, this));
             if (stopApp) { try { await conn.StopAppAsync(CancellationToken.None); } catch (CastException) { } }
             await conn.DisposeAsync();
             await owner.Hls.StopAsync(stream.Id);

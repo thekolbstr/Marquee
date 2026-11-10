@@ -516,8 +516,8 @@ public sealed class CastEndToEndTests : IDisposable
         await Task.Delay(1500);                                                              // the server sees it playing
         _tv.PlayerState = "IDLE"; _tv.IdleReason = "FINISHED";
         await Eventually(() => _f.Factory.Services.GetRequiredService<MediaServer.Api.Cast.CastService>().Sessions().Count == 0, "the cast should end by itself");
-        using var conn = _f.Db.Open();
-        Assert.Equal(1L, Convert.ToInt64(MediaServer.Api.Data.Database.Scalar(conn, $"SELECT watched FROM media_progress WHERE media_id={media}")));
+        long Watched() { using var conn = _f.Db.Open(); return Convert.ToInt64(MediaServer.Api.Data.Database.Scalar(conn, $"SELECT COALESCE((SELECT watched FROM media_progress WHERE media_id={media}), 0)")); }
+        await Eventually(() => Watched() == 1, "the title should be marked watched");
         await Eventually(() => _f.Factory.Services.GetRequiredService<MediaServer.Api.Hls.HlsSessionManager>().Sessions.Count == 0, "the stream should be stopped");
     }
 
