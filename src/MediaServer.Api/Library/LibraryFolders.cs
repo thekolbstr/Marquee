@@ -18,7 +18,22 @@ public sealed class FolderException(string message) : Exception(message);
 /// </summary>
 public sealed partial class LibraryFolders(Database db, IConfiguration config, TimeProvider time)
 {
-    private static readonly string[] Denied = ["/proc", "/sys", "/dev", "/etc", "/run", "/var/run", "/boot", "/root", "/usr", "/bin", "/sbin", "/lib", "/lib64", "/app", "/System", "/private", "/Library"];
+    private static readonly string[] Denied = BuildDenied();
+    private static readonly StringComparison PathComparison = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+
+    private static string[] BuildDenied()
+    {
+        string[] unix = ["/proc", "/sys", "/dev", "/etc", "/run", "/var/run", "/boot", "/root", "/usr", "/bin", "/sbin", "/lib", "/lib64", "/app", "/System", "/private", "/Library"];
+        if (!OperatingSystem.IsWindows()) return unix;
+        // Windows: the system folders on every drive, plus the ones the environment names (the OS may not be on C:).
+        var list = new List<string>(unix);
+        foreach (var f in new[] { Environment.SpecialFolder.Windows, Environment.SpecialFolder.ProgramFiles, Environment.SpecialFolder.ProgramFilesX86, Environment.SpecialFolder.CommonApplicationData })
+            if (Environment.GetFolderPath(f) is { Length: > 0 } dir) list.Add(dir);
+        foreach (var drive in DriveInfo.GetDrives())
+            foreach (var name in new[] { "$Recycle.Bin", "System Volume Information" })
+                list.Add(System.IO.Path.Combine(drive.RootDirectory.FullName, name));
+        return [.. list];
+    }
     private const int MaxEntries = 500;
 
     [GeneratedRegex(@"^@f(\d{1,9})/")] private static partial Regex PrefixRx();
@@ -107,11 +122,11 @@ public sealed partial class LibraryFolders(Database db, IConfiguration config, T
     /// <summary>Normalises a path and refuses anything that isn't a sensible library folder.</summary>
     internal string Check(string? raw)
     {
-        if (string.IsNullOrWhiteSpace(raw) || raw.Length > 1000 || raw.Any(char.IsControl)) throw new FolderException("Enter a full folder path, such as /media/movies.");
+        if (string.IsNullOrWhiteSpace(raw) || raw.Length > 1000 || raw.Any(char.IsControl)) throw new FolderException("Enter a full folder path, such as /media/movies (or D:\\Movies on Windows).");
         if (!System.IO.Path.IsPathRooted(raw)) throw new FolderException("The path must be absolute (start with /).");
         var path = Normalize(raw);
         if (!Directory.Exists(path)) throw new FolderException("That folder doesn't exist on the server (or isn't mounted into it).");
-        if (IsDenied(path)) throw new FolderException("That location can't be used as a library.");
+        if (IsDenied(path) || (OperatingSystem.IsWindows() && string.Equals(path, System.IO.Path.GetPathRoot(path), PathComparison))) throw new FolderException("That location can't be used as a library.");
         if (!Allowed(path)) throw new FolderException("That folder is outside the locations this server is allowed to use.");
         try { using var e = Directory.EnumerateFileSystemEntries(path).GetEnumerator(); e.MoveNext(); }
         catch (Exception ex) when (ex is UnauthorizedAccessException or IOException) { throw new FolderException("The server isn't allowed to read that folder."); }
@@ -145,7 +160,7 @@ public sealed partial class LibraryFolders(Database db, IConfiguration config, T
 
     private static bool Overlaps(string a, string b) => Inside(a, b) || Inside(b, a);
     private static bool Inside(string child, string parent) =>
-        string.Equals(child, parent, StringComparison.Ordinal) || child.StartsWith(parent.TrimEnd('/', '\\') + System.IO.Path.DirectorySeparatorChar, StringComparison.Ordinal);
+        string.Equals(child, parent, PathComparison) || child.StartsWith(parent.TrimEnd('/', '\\') + System.IO.Path.DirectorySeparatorChar, PathComparison);
 
     private static bool IsDenied(string path) => path.Length <= 1 || Denied.Any(d => Inside(path, d));
 

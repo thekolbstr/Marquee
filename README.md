@@ -2,6 +2,17 @@
 
 A self-hosted media server for your movies, shows and live TV: direct play first, transcoding last (.NET 10, Minimal APIs, SQLite, ffmpeg).
 
+## Screenshots
+
+Shown with a demo library and no TMDB token, so artwork comes from video frames.
+
+| | |
+|---|---|
+| ![Home](docs/screenshots/home.png) | ![Movies](docs/screenshots/movies.png) |
+| ![A show with its episodes](docs/screenshots/show.png) | ![The player](docs/screenshots/player.png) |
+
+![Settings](docs/screenshots/settings.png)
+
 ## Run (dev)
 
 Needs the .NET 10 SDK and `ffmpeg`/`ffprobe` on PATH. Media is addressed by database ID, never by client-supplied path.
@@ -27,6 +38,15 @@ detail pages with season tabs, and a full-screen player (keyboard: space/k, j/l 
 - **Watch progress lives on the server** (`POST /api/media/{id}/progress`), so Continue Watching and resume follow you between
   browsers. "Up next" appears when the latest episode of a show is finished.
 - Safari plays HLS through its native player (HEVC in fMP4 needs it); other browsers use the bundled hls.js.
+
+## Run on Windows
+
+Download `Marquee-windows-x64.zip` from the [Releases](../../releases) page (it bundles the .NET runtime and ffmpeg, so there is nothing to install), unzip it somewhere you can write to
+(not Program Files), and double-click **Start-Marquee.bat**. Your browser opens http://localhost:8080; create the first account and add your media folders (for example `D:\Movies`).
+Allow it through Windows Firewall if you want other devices to connect. Data lives in the `data` folder next to the launcher; to update, unzip the new version over the old one and keep `data`.
+
+To build the zip yourself: `dotnet publish src/MediaServer.Api -c Release -r win-x64 --self-contained -o out/Marquee`, then copy `packaging/windows/*` next to the output and put `ffmpeg.exe` and `ffprobe.exe` in an `ffmpeg` folder there.
+The `windows` workflow does this on every `m*` tag and attaches the zip to the release.
 
 ## Quick start (Docker)
 
