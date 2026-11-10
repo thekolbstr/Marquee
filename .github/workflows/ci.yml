@@ -102,3 +102,31 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
+
+  # Optional: point a GitOps repo at the image that was just pushed, so the cluster picks up every change on main.
+  # Does nothing unless the repository variable GITOPS_REPO (owner/name) and the secret GITOPS_TOKEN (write access to it) are set.
+  # Variables: GITOPS_REPO, GITOPS_FILE (manifest containing the image line, e.g. mediaserver/resources.yaml), IMAGE_NAME.
+  deploy:
+    needs: image
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.GITOPS_REPO != '' && vars.GITOPS_FILE != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    concurrency: gitops-deploy
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ vars.GITOPS_REPO }}
+          token: ${{ secrets.GITOPS_TOKEN }}
+      - name: Point the manifest at this build
+        env:
+          FILE: ${{ vars.GITOPS_FILE }}
+        run: |
+          set -euo pipefail
+          tag="sha-${GITHUB_SHA::7}"
+          sed -i -E "s#(image: ${IMAGE}:)sha-[0-9a-f]+#\1${tag}#" "$FILE"
+          git diff --quiet && { echo "already at ${tag}"; exit 0; }
+          git config user.name "marquee-ci"
+          git config user.email "marquee-ci@users.noreply.github.com"
+          git commit -am "mediaserver: ${tag} (${GITHUB_REPOSITORY}@${GITHUB_SHA::7})"
+          for i in 1 2 3; do git push && exit 0; git pull --rebase; done
+          exit 1
