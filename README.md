@@ -19,7 +19,7 @@
 
 ## Contents
 
-[Get it](#get-it) · [First run](#first-run) · [What it does](#what-it-does) · [How it works](#how-it-works) · [How playback works](#how-playback-works) · [Configuration](#configuration) · [Security](#security) · [Running it in production](#running-it-in-production) · [Development](#development) · [License](#license)
+[Get it](#get-it) · [First run](#first-run) · [What it does](#what-it-does) · [How it works](#how-it-works) · [Casting](#casting-to-a-tv) · [How playback works](#how-playback-works) · [Configuration](#configuration) · [Security](#security) · [Running it in production](#running-it-in-production) · [Development](#development) · [License](#license)
 
 ---
 
@@ -81,7 +81,7 @@ After that, everyone signs in on the login page. Add more people under **Setting
 - Keyboard: space/k play, j/l or arrows seek, f fullscreen, m mute, n next, c captions, i stats, Esc back.
 - **Skip intro / Skip credits** when the file has chapters named like "Opening" or "Credits", **seek-bar previews**, **audio track** and **subtitle** menus, **playback speed**, and a **quality** picker.
 - **Captions**: text tracks inside the file and `.srt` / `.vtt` / `.ass` files next to it (`Movie.en.srt`) are converted to WebVTT on demand. Picture subtitles (PGS, DVD) can be burned into the video (this re-encodes it).
-- **Cast**: AirPlay in Safari; Chromecast in Chrome (needs a secure page, and a plain-http address for the TV; set *Address for casting* in Settings → Network & security).
+- **Cast to a TV**: the server finds Chromecasts and TVs with Chromecast built in, and plays on them for you, from any browser (see [Casting to a TV](#casting-to-a-tv)). AirPlay in Safari.
 - **Stats for nerds** (the cog, or `I`): play mode and why, source and output formats, bitrate, decoded vs displayed size, dropped frames, buffer, network speed, encoder and segment progress, and the browser's capabilities, with a Copy button for bug reports.
 - Posters show how much of a title is left ("42m left") and a check mark once it's watched.
 - **Install it as an app** from the browser menu (phone or desktop; needs HTTPS or localhost).
@@ -168,11 +168,31 @@ When scans happen: about 5 seconds after startup, then every `Library:ScanInterv
 | `Hls/`, `Streaming/` | playback planner, ffmpeg command builder, HLS sessions, HTTP range streaming |
 | `Metadata/` | TMDB client, matcher, image cache |
 | `LiveTv/`, `Recording/` | M3U/XMLTV import, guide, recording scheduler |
+| `Cast/` | Chromecast discovery (mDNS), the Cast protocol, and the service that plays on TVs |
 | `Arr/` | Radarr and Sonarr integration |
 | `Auth/`, `Security/` | accounts, sessions, 2FA, encryption of stored secrets, HTTPS certificates |
 | `Settings/`, `Maintenance/`, `Data/` | settings service, maintenance tasks, SQLite access |
 | `Endpoints/` | the HTTP API |
 | `wwwroot/` | the web app |
+
+## Casting to a TV
+
+Press the cast button in the player and pick a TV. Marquee does the casting itself rather than the browser:
+
+1. The server looks for Chromecasts on its network (mDNS, the same way a phone does; this takes about three seconds) and lists them in the picker.
+2. When you choose one it starts a stream the TV can play (H.264 and AAC; video is copied when it already fits), launches the TV's built-in media player, and tells it to fetch the stream from the server.
+3. The page becomes a remote: play/pause, seek, volume and mute, subtitles, and stop. Pause or seek from your phone and the TV follows.
+4. The server watches the TV. It keeps the stream alive, saves your watch progress as the person who started it, marks the title watched when it ends, and cleans up when it finishes or someone closes the player on the TV.
+
+Because the server does the work, casting needs no secure (https) page, works in any browser, loads nothing from Google, and keeps playing if you close the tab. Open the same title again and the player picks the remote back up. Subtitles are sent to the TV as WebVTT.
+
+**Making sure the server can see the TV.** The server has to be on the same network as the TV and able to receive multicast discovery.
+- Running directly on a computer: nothing to do.
+- Docker on Linux: use host networking (`network_mode: host`) so discovery works; with a bridge network the server can't see the TVs.
+- Can't use discovery (a container on Docker Desktop, another subnet)? List the TV's address under **Settings → Network & security → TV addresses** (`Cast__Devices=192.0.2.40`). The server asks the TV for its name.
+- The TV fetches the video from the server by address. By default the server uses its own address on the TV's network; if that is wrong (for example inside a container), set **Address for casting** (`Cast__BaseUrl=http://192.0.2.10:8080`, plain http).
+
+**Security.** Casting requires being signed in, like the rest of `/api`. The TV never gets your cookie: it is given a stream address containing an unguessable id, and a signed, expiring link for subtitles. Devices are identified by the server's own discovery or by addresses an administrator typed in, never by an address the browser supplies. The TV's certificate is not verified (it is issued by Google's device authority, which a self-hosted server can't check), so use this on a network you trust.
 
 ## How playback works
 
@@ -212,6 +232,7 @@ Almost everything is changed in the web app under **gear icon → Settings**. En
 | `Images__CacheDir` | Artwork and thumbnail cache |
 | `Tmdb__ReadAccessToken` | TMDB v4 read access token (or `Tmdb__ApiKey`); in Kubernetes, supply it from a Secret |
 | `Recordings__Directory` | Where recordings are written |
+| `Cast__Devices`, `Cast__BaseUrl` | TV addresses to use when discovery can't find them, and the server address a TV should fetch from (see [Casting to a TV](#casting-to-a-tv)) |
 | `Auth__Enabled`, `Auth__SetupCode`, `Auth__TrustProxy` | See [Security](#security) |
 | `Https__Enabled`, `Https__Port`, `Https__Hostnames`, `Https__CertificatePath` | See [Security](#security) |
 | `Security__SecretKey` | Key for encrypting stored secrets (see below) |
@@ -256,7 +277,7 @@ Wrong match? Find the right id with `GET /api/tmdb/search?type=movie&q=...`, the
     node --test web-tests/*.test.js      # unit tests for the page's pure logic (shared.js)
     npx eslint@9 -c eslint.config.mjs 'src/MediaServer.Api/wwwroot/*.js' 'web-tests/*.js'
 
-Chromecast and AirPlay need real devices to try and are not covered by the automated tests.
+Casting is covered by tests against a pretend TV (a local TLS server that answers the Cast protocol like a Chromecast), plus a check that discovery finds a real Chromecast on a real network. Playback on actual TVs, and AirPlay, still need real devices to try.
 
 ## License
 

@@ -105,13 +105,13 @@ class Player {
     const v = this.video;
     const btn = (name, label, onclick) => h('button', { class: 'cbtn', type: 'button', title: label, 'aria-label': label, onclick }, icon(name));
     this.playBtn = btn('play', 'Play / pause (Space)', () => this.togglePlay());
-    this.muteBtn = btn('volume', 'Mute (M)', () => { v.muted = !v.muted; });
+    this.muteBtn = btn('volume', 'Mute (M)', () => this.toggleMute());
     this.castBtn = btn('cast', 'Cast to a TV', () => this.cast());
     this.gearBtn = btn('gear', 'Settings', () => this.toggleMenu());
     this.gearBtn.setAttribute('aria-haspopup', 'true');
     this.fsBtn = btn('expand', 'Full screen (F)', () => this.toggleFullscreen());
     this.vol = h('input', { class: 'vol', type: 'range', min: '0', max: '1', step: '0.05', value: String(v.volume), 'aria-label': 'Volume' });
-    this.vol.addEventListener('input', () => { v.volume = parseFloat(this.vol.value); v.muted = false; });
+    this.vol.addEventListener('input', () => { if (this.castSession) { this.castCmd('volume', parseFloat(this.vol.value)); return; } v.volume = parseFloat(this.vol.value); v.muted = false; });
     this.cur = h('span', { class: 'time' }, '0:00');
     this.dur = h('span', { class: 'time' }, formatClock(this.total()));
     this.buf = h('i', { class: 'buf' }); this.fill = h('i', { class: 'fill' }); this.knob = h('b', { class: 'knob' });
@@ -174,8 +174,12 @@ class Player {
     this.setupAirPlayState();
   }
 
+  toggleMute() { if (this.castSession) this.castCmd('mute', this.castSession.muted ? 0 : 1); else this.video.muted = !this.video.muted; }
   swapIcon(button, name) { button.replaceChildren(icon(name)); }
-  togglePlay() { const v = this.video; if (v.paused) v.play().catch(() => {}); else v.pause(); }
+  togglePlay() {
+    if (this.castSession) { this.castCmd(this.castSession.state === 'PLAYING' || this.castSession.state === 'BUFFERING' ? 'pause' : 'play'); return; }
+    const v = this.video; if (v.paused) v.play().catch(() => {}); else v.pause();
+  }
 
   wake() {
     this.stage.classList.remove('idle');
@@ -198,12 +202,13 @@ class Player {
 
   seekTo(t) {
     const d = this.total();
+    if (this.castSession) { const to = Math.max(0, d ? Math.min(d - 1, t) : t); this.castTime = to; this.paint(); this.castCmd('seek', to); return; }
     let to = Math.max(0, d ? Math.min(d - 0.5, t) : t);
     const r = this.video.seekable;                  // a copied stream can only be entered where it has been produced so far
     if (r && r.length && to > r.end(r.length - 1)) to = r.end(r.length - 1);
     this.video.currentTime = to;
   }
-  skip(dt) { this.seekTo(this.video.currentTime + dt); this.wake(); }
+  skip(dt) { this.seekTo(this.position() + dt); this.wake(); }
 
   toggleFullscreen() {
     const s = this.stage, v = this.video;
@@ -258,7 +263,7 @@ class Player {
       case 'ArrowRight': case 'l': e.preventDefault(); this.skip(skipSeconds()); break;
       case 'ArrowUp': e.preventDefault(); v.volume = Math.min(1, v.volume + 0.1); break;
       case 'ArrowDown': e.preventDefault(); v.volume = Math.max(0, v.volume - 0.1); break;
-      case 'm': v.muted = !v.muted; break;
+      case 'm': this.toggleMute(); break;
       case 'f': this.toggleFullscreen(); break;
       case 'c': this.toggleCaptions(); break;
       case 'i': this.toggleStats(); break;
@@ -436,7 +441,7 @@ class Player {
       time: this.position(), duration: this.total(), rate: v.playbackRate, bufferAhead: v.buffered.length ? bufferAhead(this.bufferedRanges(), v.currentTime) : undefined,
       bandwidth: this.hls ? this.hls.bandwidthEstimate : undefined, downlink: conn.downlink, netType: conn.effectiveType,
       session: this.session ? this.session.sessionId.slice(0, 8) : null, server: this.serverInfo, targetKbps: this.serverInfo ? this.serverInfo.videoKbps : undefined,
-      engine: this.castSession ? 'Google Cast' : this.hls ? `hls.js ${Hls.version}` : this.session ? 'native HLS' : 'native <video>',
+      engine: this.castSession ? 'Cast (the server drives the TV)' : this.hls ? `hls.js ${Hls.version}` : this.session ? 'native HLS' : 'native <video>',
       device: `${browserName()} · ${CAPS.v || 'no video'} · ${CAPS.a || 'no audio'}`,
     };
   }
@@ -471,15 +476,16 @@ class Player {
     this.loadMarkers();
     this.loadPreviews();
     if (pref('stats') === 'on') this.setStats(true);
+    if (await this.resumeCasting()) return;          // already playing on a TV: this page just becomes its remote
     try { await (this.quality !== 'original' ? this.startHls(this.startAt, false) : this.startPlayback(this.startAt)); }
     catch (e) { if (!this.disposed) { this.report('start-failed', e.message); this.fail(e.message); } return; }
     if (this.disposed) this.stream.stop();            // navigated away while the stream was starting
   }
 
   // Restart from the same moment, optionally changing the audio track / burned-in subtitles / quality.
-  async reload(change, notice) {
+  async reload(change, notice, atOverride) {
     Object.assign(this.extra, change);
-    const at = this.position(), wasPlaying = !this.video.paused;
+    const at = atOverride ?? this.position(), wasPlaying = atOverride == null && !this.video.paused;
     this.saveNow();
     this.stream.stop();                                // ends the current stream (direct listeners or the server-side session)
     this.session = null; this.hls = null; this.serverInfo = null;
@@ -595,68 +601,138 @@ class Player {
   }
 
   // ------------------------------------------------------------------ casting
-  // Safari/iOS: AirPlay (the system picker). Chrome: Google Cast, which needs a secure page. Everything else can't cast.
-  cast() {
+  // The server does the casting: it finds Chromecasts on the network, starts a stream the TV can play and tells the TV to fetch it. This page is
+  // then only a remote control, so it works in any browser, needs no secure page, and the TV keeps playing if the tab is closed.
+  // Safari's own AirPlay picker is offered alongside.
+  cast() { if (this.castSession) this.castPanel(); else this.castPicker(); }
+
+  castDialog(title, ...kids) {
+    this.closeCastDialog();
+    const dlg = h('div', { class: 'dlg-backdrop', onclick: (e) => { if (e.target === dlg) dlg.remove(); } },
+      h('div', { class: 'dlg', role: 'dialog', 'aria-modal': 'true', 'aria-label': title }, h('h2', {}, title), ...kids));
+    this.stage.append(dlg);                                        // inside the player, so it is visible in full screen too
+    this.castDlg = dlg;
+    return dlg;
+  }
+  closeCastDialog() { if (this.castDlg) { this.castDlg.remove(); this.castDlg = null; } }
+
+  castPicker() {
     const v = this.video;
-    if (this.castSession) { this.stopCasting(); return; }
-    if (v.webkitShowPlaybackTargetPicker) { v.webkitShowPlaybackTargetPicker(); return; }
-    if (!/Chrome|Edg|CriOS/.test(navigator.userAgent)) { this.castHelp('This browser can’t cast. Use Safari (AirPlay) or Chrome (Chromecast).'); return; }
-    if (!window.isSecureContext) {
-      const https = APP.httpsPort ? `https://${location.hostname}:${APP.httpsPort}${location.pathname}${location.hash}` : null;
-      this.castHelp('Chrome only allows casting from a secure (https://) page.' + (https ? '' : ' Ask whoever runs the server to turn on HTTPS (Settings → Network & security).'), https);
-      return;
+    const list = h('div', { class: 'dlg-list' });
+    const row = (title, sub, onclick) => h('button', { class: 'hit', type: 'button', onclick }, h('div', { class: 'hit-text' }, h('strong', {}, title), sub ? h('small', {}, sub) : null));
+    const look = async (refresh) => {
+      list.replaceChildren(h('p', { class: 'muted' }, 'Looking for TVs…'));
+      let devices;
+      try {
+        const r = await fetch(`/api/cast/devices${refresh ? '?refresh=1' : ''}`);
+        if (!r.ok) throw new Error('failed');
+        devices = (await r.json()).devices || [];
+      } catch { list.replaceChildren(h('p', {}, 'The server couldn’t look for TVs.')); return; }
+      const rows = [];
+      if (v.webkitShowPlaybackTargetPicker) rows.push(row('AirPlay', 'Apple TV, AirPlay speakers and TVs', () => { this.closeCastDialog(); v.webkitShowPlaybackTargetPicker(); }));
+      for (const d of devices) rows.push(row(d.name, d.busy ? 'Playing something now' : d.model !== d.name ? d.model : '', () => this.castTo(d, list)));
+      if (!devices.length) rows.push(h('p', { class: 'muted' }, 'No TVs found. They must be on the same network as the server, and the server has to be able to see them: in Docker, use host networking, or list the TV’s address in Settings → Network & security.'));
+      list.replaceChildren(...rows);
+    };
+    this.castDialog('Play on…', list, h('div', { class: 'dlg-actions' },
+      h('button', { class: 'btn glass', type: 'button', onclick: () => look(true) }, 'Look again'),
+      h('button', { class: 'btn glass', type: 'button', onclick: () => this.closeCastDialog() }, 'Close')));
+    look(false);
+  }
+
+  async castTo(device, list) {
+    list.replaceChildren(h('p', {}, `Starting on ${device.name}…`));
+    try {
+      const at = Math.floor(this.position());
+      const res = await fetch('/api/cast/play', { method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ deviceId: device.id, mediaId: this.f.mediaId, title: this.f.title, startSeconds: at, audioIndex: this.extra.audioIndex ?? null, caption: this.captionActive || null }) });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.detail || data.error || 'The TV wouldn’t start.');
+      this.closeCastDialog();
+      this.stream.stop();                                          // the TV has its own stream; this page stops playing locally
+      this.session = null; this.hls = null;
+      this.video.pause(); this.video.removeAttribute('src'); this.video.load();
+      this.setBusy(false);
+      this.attachCast(data);
+    } catch (e) {
+      list.replaceChildren(h('p', {}, e.message), h('button', { class: 'btn glass', type: 'button', onclick: () => { this.closeCastDialog(); this.castPicker(); } }, 'Choose another TV'));
     }
-    this.castToChromecast().catch((e) => { if (e && e.message && !/cancel/i.test(e.message)) toast(e.message, true); });
   }
 
-  castHelp(message, link) {
-    const dlg = h('div', { class: 'dlg-backdrop', onclick: (e) => { if (e.target === dlg) dlg.remove(); } }, h('div', { class: 'dlg', role: 'dialog', 'aria-modal': 'true', 'aria-label': 'Casting' },
-      h('h2', {}, 'Casting'), h('p', {}, message),
-      h('div', { class: 'dlg-actions' }, link ? h('a', { class: 'btn', href: link }, 'Open the secure page') : h('span'), h('button', { class: 'btn glass', type: 'button', onclick: () => dlg.remove() }, 'Close'))));
-    document.body.append(dlg);
-  }
-
-  // The TV fetches the stream itself, so it is handed an HLS stream it can play (H.264 + AAC) at an address it can reach. That address must be
-  // plain http: a TV doesn't trust a home network's private certificate authority. (Settings → Network & security → Address for casting.)
-  castBase() { return (APP.castBaseUrl || (location.protocol === 'http:' ? location.origin : `http://${location.hostname}`)).replace(/\/+$/, ''); }
-
-  async castToChromecast() {
-    const f = this.f;
-    if (/^(localhost|127\.|\[::1\])/.test(location.hostname) && !APP.castBaseUrl) { this.castHelp('A TV can’t reach “localhost”. Open the server by its network address, or set “Address for casting” in Settings → Network & security.'); return; }
-    await loadCastSdk();
-    const ctx = cast.framework.CastContext.getInstance();
-    ctx.setOptions({ receiverApplicationId: chrome.cast.media.DEFAULT_MEDIA_RECEIVER_APP_ID, autoJoinPolicy: chrome.cast.AutoJoinPolicy.ORIGIN_SCOPED });
-    await ctx.requestSession();
-    const session = ctx.getCurrentSession();
-    const res = await fetch('/api/hls/start', { method: 'POST', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ mediaId: f.mediaId, video: 'h264', audio: 'aac,mp3', containers: 'mp4', startSeconds: Math.floor(this.position()), audioIndex: this.extra.audioIndex ?? null }) });
-    if (!res.ok) { ctx.endCurrentSession(true); throw new Error((await res.json().catch(() => ({}))).detail || 'The server couldn’t prepare a stream for the TV.'); }
-    const s = await res.json();
-    const media = new chrome.cast.media.MediaInfo(`${this.castBase()}${s.playlistUrl}`, 'application/x-mpegURL');
-    media.streamType = chrome.cast.media.StreamType.BUFFERED;
-    media.metadata = new chrome.cast.media.GenericMediaMetadata(); media.metadata.title = f.title;
-    const req = new chrome.cast.media.LoadRequest(media); req.currentTime = this.position();
-    this.video.pause();
-    await session.loadMedia(req);
-    this.castSession = { ctx, hlsId: s.sessionId, device: session.getCastDevice().friendlyName };
+  // Take over as the remote for a cast the server is running (just started here, or already running when this page opened).
+  attachCast(info) {
+    this.castSession = { deviceId: info.deviceId, name: info.deviceName };
+    this.castTime = info.position || 0;
+    this.applyCastInfo(info);
     this.castBtn.classList.add('on');
-    this.castBanner.replaceChildren(h('strong', {}, `Playing on ${this.castSession.device}`), h('button', { class: 'btn glass small', type: 'button', onclick: () => this.stopCasting() }, 'Stop casting'));
     this.castBanner.classList.remove('hidden');
-    // keep our own position (for "resume" and the progress bar) in step with the TV
-    const rp = new cast.framework.RemotePlayer(), rc = new cast.framework.RemotePlayerController(rp);
-    rc.addEventListener(cast.framework.RemotePlayerEventType.CURRENT_TIME_CHANGED, () => { this.castTime = rp.currentTime; this.paint(); });
-    ctx.addEventListener(cast.framework.CastContextEventType.SESSION_STATE_CHANGED, (e) => { if (e.sessionState === cast.framework.SessionState.SESSION_ENDED) this.stopCasting(true); });
+    clearInterval(this.timers.cast);
+    this.timers.cast = setInterval(() => this.pollCast(), 1000);
   }
 
-  stopCasting(alreadyEnded) {
+  applyCastInfo(info) {
+    const c = this.castSession;
+    Object.assign(c, { state: info.state, captions: info.captions || [], activeCaption: info.activeCaption || '', volume: info.volume, muted: info.muted });
+    this.castTime = info.position || 0;
+    this.swapIcon(this.playBtn, info.state === 'PLAYING' || info.state === 'BUFFERING' ? 'pause' : 'play');
+    this.swapIcon(this.muteBtn, info.muted || info.volume === 0 ? 'mute' : 'volume');
+    this.vol.value = info.muted ? '0' : String(info.volume ?? 1);
+    this.castBanner.replaceChildren(h('strong', {}, info.state === 'LOADING' || info.state === 'BUFFERING' ? `Starting on ${c.name}…` : `Playing on ${c.name}`),
+      h('button', { class: 'btn glass small', type: 'button', onclick: () => this.stopCasting() }, 'Stop casting'));
+    this.paint();
+  }
+
+  async pollCast() {
+    const c = this.castSession;
+    if (!c || this.polling) return;
+    this.polling = true;
+    try {
+      const r = await fetch('/api/cast/sessions');
+      if (!r.ok) return;
+      const mine = ((await r.json()).sessions || []).find((x) => x.deviceId === c.deviceId && x.mediaId === this.f.mediaId);
+      if (!this.castSession) return;
+      if (mine) this.applyCastInfo(mine); else this.castEnded();
+    } catch { /* a missed poll is fine */ } finally { this.polling = false; }
+  }
+
+  async castCmd(action, value, text) {
+    const c = this.castSession;
+    if (!c) return;
+    try {
+      const r = await fetch(`/api/cast/${c.deviceId}/control`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ action, value, text }) });
+      if (!r.ok) { if (r.status === 404) this.castEnded(); else toast((await r.json().catch(() => ({}))).detail || 'The TV didn’t respond', true); }
+    } catch { toast('The TV didn’t respond', true); }
+  }
+
+  castPanel() {
+    const c = this.castSession;
+    const sel = h('select', { class: 'dlg-input', 'aria-label': 'Subtitles', onchange: () => this.castCmd('captions', null, sel.value) },
+      h('option', { value: '' }, 'Subtitles off'), ...c.captions.map((t) => h('option', { value: t.id, selected: t.id === c.activeCaption }, t.label)));
+    this.castDialog(`Playing on ${c.name}`, ...(c.captions.length ? [sel] : []),
+      h('div', { class: 'dlg-actions' },
+        h('button', { class: 'btn glass', type: 'button', onclick: () => { this.closeCastDialog(); this.castPicker(); } }, 'Switch TV'),
+        h('button', { class: 'btn', type: 'button', onclick: () => { this.closeCastDialog(); this.stopCasting(); } }, 'Stop casting'),
+        h('button', { class: 'btn glass', type: 'button', onclick: () => this.closeCastDialog() }, 'Close')));
+  }
+
+  // The TV stopped (finished, or someone pressed stop): come back to playing here, from where it got to.
+  castEnded() { this.leaveCasting(false); }
+
+  stopCasting() { this.leaveCasting(true); }
+
+  leaveCasting(tellServer) {
     const c = this.castSession;
     if (!c) return;
     this.castSession = null;
-    const resumeAt = this.castTime;
-    try { navigator.sendBeacon(`/api/hls/${c.hlsId}/stop`); } catch { /* ignore */ }
-    if (!alreadyEnded) { try { c.ctx.endCurrentSession(true); } catch { /* ignore */ } }
+    clearInterval(this.timers.cast);
+    const at = this.castTime;
+    if (tellServer) fetch(`/api/cast/${c.deviceId}/stop`, { method: 'POST', keepalive: true }).catch(() => {});
     this.castBtn.classList.remove('on'); this.castBanner.classList.add('hidden');
-    if (resumeAt > 1) this.video.currentTime = resumeAt;
+    this.swapIcon(this.playBtn, 'play');
+    if (this.disposed) return;
+    const finished = this.total() > 0 && at >= this.total() - 5;
+    if (finished) { this.onEnded(); return; }
+    this.reload({}, null, at);
   }
 
   setupAirPlayState() {
@@ -665,13 +741,28 @@ class Player {
     this.on(v, 'webkitcurrentplaybacktargetiswirelesschanged', () => this.castBtn.classList.toggle('on', !!v.webkitCurrentPlaybackTargetIsWireless));
   }
 
+  // If the server is already casting this title (started earlier, from this or another device), pick up the remote.
+  async resumeCasting() {
+    try {
+      const r = await fetch('/api/cast/sessions');
+      if (!r.ok || this.disposed || this.castSession) return !!this.castSession;
+      const mine = ((await r.json()).sessions || []).find((x) => x.mediaId === this.f.mediaId);
+      if (!mine) return false;
+      this.stream.stop(); this.session = null; this.hls = null;
+      this.video.pause(); this.video.removeAttribute('src'); this.video.load();
+      this.setBusy(false);
+      this.attachCast(mine);
+      return true;
+    } catch { return false; /* not casting, or the server is old: play here */ }
+  }
+
   // ------------------------------------------------------------------ teardown
   dispose() {
     this.disposed = true;
     Object.values(this.timers).forEach((t) => { clearTimeout(t); clearInterval(t); });
     this.disposers.forEach((fn) => fn());
     this.saveNow();                                    // the final position
-    if (this.castSession) { try { this.castSession.ctx.endCurrentSession(true); } catch { /* ignore */ } }
+    // a cast carries on without this page: the server keeps it going and saves the progress
     try { this.video.pause(); } catch { /* ignore */ }
     this.stream.stop();                                // ends the HLS session, so the server kills ffmpeg
     this.video.removeAttribute('src');
@@ -680,20 +771,6 @@ class Player {
 }
 
 const browserName = () => { const u = navigator.userAgent; return /Edg\//.test(u) ? 'Edge' : /Chrome\//.test(u) ? 'Chrome' : /Firefox\//.test(u) ? 'Firefox' : /Safari\//.test(u) ? 'Safari' : 'Browser'; };
-
-let castLoading = null;
-function loadCastSdk() {
-  if (window.cast && window.cast.framework) return Promise.resolve();
-  if (castLoading) return castLoading;
-  castLoading = new Promise((resolve, reject) => {
-    window.__onGCastApiAvailable = (ok) => (ok ? resolve() : reject(new Error('Cast isn’t available in this browser.')));
-    const s = document.createElement('script');
-    s.src = 'https://www.gstatic.com/cv/js/sender/v1/cast_sender.js?loadCastFramework=1';
-    s.onerror = () => { castLoading = null; reject(new Error('Couldn’t load Google Cast. Is this device online?')); };
-    document.head.append(s);
-  });
-  return castLoading;
-}
 
 // ================================================================ entry point (the #/watch/<id> page)
 async function showPlayer(id, params) {

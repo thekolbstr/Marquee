@@ -108,7 +108,8 @@ public sealed class SettingsService(Database db, DbSettingsProvider provider, IC
         new("Sonarr:ApiKey", "downloads", "Sonarr API key", "Sonarr → Settings → General → API Key. It's never shown again once saved.", SettingKind.Secret),
 
         // network & security
-        new("Cast:BaseUrl", "network", "Address for casting", "Optional. Cast devices (Chromecast) fetch the video themselves, so they need an address for this server that works from their side: plain http, not https. Leave empty to use the one you're browsing with.", SettingKind.Url, Placeholder: "http://192.0.2.10:8080"),
+        new("Cast:BaseUrl", "network", "Address for casting", "Optional. TVs fetch the video from the server themselves, so they need an address for it that works from their side: plain http, not https. Leave empty and the server uses its own address on the TV's network.", SettingKind.Url, Placeholder: "http://192.0.2.10:8080"),
+        new("Cast:Devices", "network", "TV addresses", "Optional. The server finds Chromecasts on its own; list their addresses here (separated by commas) when it can't, for example in a container without host networking.", SettingKind.Text, Placeholder: "192.0.2.40, 192.0.2.41"),
         new("Auth:SessionDays", "network", "“Keep me signed in” lasts", "How long a remembered sign-in stays valid. Applies to new sign-ins.", SettingKind.Int, 1, 365, Default: "30", Unit: "days"),
         new("Auth:MinPasswordLength", "network", "Shortest password allowed", "Applies when someone sets or changes a password. Existing passwords keep working.", SettingKind.Int, 8, 64, Default: "8", Unit: "characters"),
         new("Auth:IdleHours", "network", "Other sign-ins end after", "Sign-ins that weren't remembered end after this long without use.", SettingKind.Int, 1, 168, Default: "12", Unit: "hours"),

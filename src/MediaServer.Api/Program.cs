@@ -73,6 +73,7 @@ builder.Services.AddSingleton(sp =>
         sp.GetRequiredService<TimeProvider>(), sp.GetRequiredService<ILogger<HlsSessionManager>>(), () => HlsOptions.From(cfg));   // stream limit, encoder... follow the settings page
 });
 builder.Services.AddHostedService<HlsReaper>();
+builder.Services.AddSingleton<MediaServer.Api.Cast.CastService>();
 
 // Optional built-in HTTPS (for running without a reverse proxy): the HTTP port(s) keep working, and an HTTPS port is added.
 X509Certificate2? httpsCert = null;
@@ -118,6 +119,20 @@ if (httpsCert is not null && app.Configuration.GetValue("Https:RedirectHttp", fa
 // The web client (wwwroot/): public, it contains no data. "no-cache" means the browser asks the server whether its copy is still current
 // (a cheap 304 when it is), so an update shows up on the next reload instead of whenever the browser decides its copy is stale.
 app.UseStaticFiles(new StaticFileOptions { OnPrepareResponse = c => c.Context.Response.Headers.CacheControl = c.File.Name.StartsWith("icon", StringComparison.Ordinal) || c.Context.Request.Path.StartsWithSegments("/vendor") ? "public, max-age=86400" : "no-cache" });
+// A TV's media player fetches the playlist, segments and subtitles itself (from another origin), and the Cast receiver requires CORS for that.
+// These addresses are already capabilities (an unguessable stream id, or a signed link), and cookies are never sent cross-origin, so "*" gives nothing away.
+app.Use(async (ctx, next) =>
+{
+    if (MediaServer.Api.Cast.CastAccess.IsTvFetch(ctx.Request.Path))
+    {
+        ctx.Response.Headers.AccessControlAllowOrigin = "*";
+        ctx.Response.Headers.AccessControlAllowMethods = "GET, HEAD, OPTIONS";
+        ctx.Response.Headers.AccessControlAllowHeaders = "Content-Type, Range";
+        ctx.Response.Headers.AccessControlExposeHeaders = "Content-Length, Content-Range";
+        if (HttpMethods.IsOptions(ctx.Request.Method)) { ctx.Response.StatusCode = StatusCodes.Status204NoContent; return; }
+    }
+    await next();
+});
 app.UseMiddleware<AuthMiddleware>();
 
 app.MapGet("/health", () => Results.Ok(new { status = "ok" }));
@@ -174,6 +189,7 @@ app.MapRecordingEndpoints();
 app.MapMaintenanceEndpoints();
 app.MapFolderEndpoints();
 app.MapHlsEndpoints();
+app.MapCastEndpoints();
 
 app.Run();
 

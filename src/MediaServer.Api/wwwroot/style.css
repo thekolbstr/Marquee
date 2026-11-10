@@ -104,6 +104,7 @@ main { min-height: 70vh; padding-bottom: 80px; }
 .dlg-backdrop { position: fixed; inset: 0; z-index: 150; display: grid; place-items: center; padding: 16px; background: rgba(4,6,10,.72); backdrop-filter: blur(4px); }
 .dlg { width: min(640px, 100%); max-height: min(82vh, 720px); display: flex; flex-direction: column; gap: 10px; padding: 22px; border-radius: 16px; background: var(--surface); border: 1px solid var(--line); box-shadow: 0 30px 80px rgba(0,0,0,.6); }
 .dlg h2 { margin: 0; }
+.dlg .muted { color: var(--muted); line-height: 1.5; }
 .dlg-input { padding: 11px 16px; border-radius: 999px; border: 1px solid var(--line); background: var(--bg); color: var(--text); font: inherit; }
 .dlg-input:focus { outline: none; border-color: var(--accent); }
 .dlg-list { overflow-y: auto; display: flex; flex-direction: column; gap: 6px; min-height: 120px; padding-right: 2px; }

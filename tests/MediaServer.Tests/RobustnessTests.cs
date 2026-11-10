@@ -30,13 +30,13 @@ public sealed class SecurityHeaderTests : IDisposable
         Assert.Contains("camera=()", res.Headers.GetValues("Permissions-Policy").Single());
     }
 
-    [Fact] public async Task TheContentSecurityPolicy_IsStrict_ButLetsThePlayerAndCastWork()
+    [Fact] public async Task TheContentSecurityPolicy_IsStrict_AndLoadsNothingFromOutsideThisServer()
     {
         var csp = (await _f.Client().GetAsync("/")).Headers.GetValues("Content-Security-Policy").Single();
         Assert.Contains("default-src 'self'", csp); Assert.Contains("frame-ancestors 'none'", csp); Assert.Contains("object-src 'none'", csp); Assert.Contains("base-uri 'none'", csp);
         var scripts = csp.Split(';').Select(x => x.Trim()).Single(x => x.StartsWith("script-src"));
         Assert.DoesNotContain("'unsafe-inline'", scripts); Assert.DoesNotContain("'unsafe-eval'", scripts);        // no inline or eval'd script, ever
-        Assert.Contains("https://www.gstatic.com", scripts);                                                         // Google Cast's library
+        Assert.DoesNotContain("http", csp);                                                                           // casting is done by the server, so no third-party script or connection is needed
         Assert.Contains("media-src 'self' blob:", csp); Assert.Contains("worker-src 'self' blob:", csp);              // hls.js
     }
 

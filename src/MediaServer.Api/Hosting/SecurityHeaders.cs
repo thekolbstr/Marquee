@@ -2,19 +2,19 @@ namespace MediaServer.Api.Hosting;
 
 /// <summary>
 /// Headers that tell the browser what the page may and may not do. The page is plain scripts served from this origin, so the policy is strict:
-/// no inline scripts, no framing, no plugins. (Google's cast library is allowed because Chromecast needs it.)
+/// no inline scripts, no framing, no plugins.
 /// </summary>
 public sealed class SecurityHeadersMiddleware(RequestDelegate next)
 {
     private const string Csp =
         "default-src 'self'; " +
-        "script-src 'self' https://www.gstatic.com; " +
+        "script-src 'self'; " +
         "style-src 'self' 'unsafe-inline'; " +                          // the app sets small inline style attributes (positions, colours)
-        "img-src 'self' data: blob: https://www.gstatic.com; " +
+        "img-src 'self' data: blob:; " +
         "media-src 'self' blob:; " +
-        "connect-src 'self' https://www.gstatic.com; " +
+        "connect-src 'self'; " +
         "worker-src 'self' blob:; " +
-        "frame-src https://www.gstatic.com; " +
+        "frame-src 'none'; " +
         "object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'";
 
     public Task InvokeAsync(HttpContext ctx)

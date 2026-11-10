@@ -220,6 +220,8 @@ public sealed class AuthMiddleware(RequestDelegate next)
         if (System.Text.RegularExpressions.Regex.IsMatch(path.Value ?? "", "^/api/hls/[0-9a-f]{32}/")) { await next(ctx); return; }
         // Radarr/Sonarr announcing an import: the token in the address is checked by the endpoint.
         if (HttpMethods.IsPost(ctx.Request.Method) && System.Text.RegularExpressions.Regex.IsMatch(path.Value ?? "", "^/api/arr/webhook/[0-9a-f]{48}$")) { await next(ctx); return; }
+        // Subtitles for a TV: a signed link for that one file's captions.
+        if (HttpMethods.IsGet(ctx.Request.Method) && MediaServer.Api.Cast.CastAccess.CaptionMediaId(path) is { } capId && auth.CheckStreamToken(capId, ctx.Request.Query["k"])) { await next(ctx); return; }
         if (path.StartsWithSegments("/stream", out var sid) && long.TryParse(sid.Value?.TrimStart('/'), out var mediaId) && auth.CheckStreamToken(mediaId, ctx.Request.Query["k"])) { await next(ctx); return; }
 
         var user = auth.Validate(ctx.Request.Cookies[AuthService.CookieName]);

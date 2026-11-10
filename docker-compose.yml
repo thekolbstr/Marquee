@@ -6,6 +6,8 @@ services:
     build: .                              # builds the image from this repository
     # image: ghcr.io/<your-account>/marquee:latest   # or pull one your own CI published (see .github/workflows/ci.yml)
     restart: unless-stopped
+    # To cast to Chromecasts on Linux, the server must see them on the network: use host networking instead of `ports:` (see README, Casting to a TV).
+    # network_mode: host
     ports:
       - "8080:8080"
       # - "8443:8443"                  # when Https__Enabled=true
