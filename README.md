@@ -56,7 +56,7 @@ Needs the .NET 10 SDK and `ffmpeg`/`ffprobe` on `PATH`.
     export Library__Root=/path/to/media          # optional: the wizard can add folders instead
     dotnet run --project src/MediaServer.Api     # http://localhost:5087
 
-To build the packaged downloads yourself: `dotnet publish src/MediaServer.Api -c Release -r <rid> --self-contained -o out/Marquee` (rid: `win-x64`, `linux-x64`, `linux-arm64`, `osx-arm64`, `osx-x64`), then copy `packaging/windows/*` or `packaging/unix/*` next to the output. The `package` workflow does this for every platform on each `m*` tag and attaches the files to the release.
+To build the packaged downloads yourself: `dotnet publish src/MediaServer.Api -c Release -r <rid> --self-contained -o out/Marquee` (rid: `win-x64`, `linux-x64`, `linux-arm64`, `osx-arm64`, `osx-x64`), then copy `packaging/windows/*` or `packaging/unix/*` next to the output. The `package` workflow does this for every platform: in GitHub, open **Actions → package → Run workflow**, enter a version (for example `0.0.3`) and it publishes a release with all the downloads attached.
 
 ## First run
 
@@ -269,7 +269,7 @@ Wrong match? Find the right id with `GET /api/tmdb/search?type=movie&q=...`, the
 - Set `Auth__SetupCode` before exposing a new server, and `Security__SecretKey` from your secret store.
 - Mount the media read-only; give `/data` (database, artwork) and the transcode folder real disk.
 - For GPU encoding in Docker, give the container access to the NVIDIA runtime and set `Hls__Encoder=nvenc`.
-- CI (`.github/workflows/ci.yml`) runs the tests, lints the web app, builds the image, smoke-tests it and pushes it to `ghcr.io` on `main` and on `m*` tags.
+- CI (`.github/workflows/ci.yml`) runs the tests, lints the web app, builds the image, smoke-tests it and pushes it to `ghcr.io` on `main` and on `m*` and `v*` tags.
 
 ## Development
 

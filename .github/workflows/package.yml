@@ -1,10 +1,24 @@
 name: package
 
-# Self-contained downloads for Windows, Linux and macOS. On an m* tag they are attached to that release.
+# Self-contained downloads for Windows, Linux and macOS.
+# To publish a release: Actions → package → Run workflow, and fill in the version. The builds run, then a release (with its tag, made for you)
+# appears under Releases with every download attached. Creating a release by hand in the GitHub UI (v* tag) also works: the files are attached to it.
+# Run it without a version to just build the files (they are kept as workflow artifacts).
 on:
   push:
-    tags: ["m*"]
+    tags: ["v*"]
   workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to release, for example 0.0.3 (leave empty to only build)"
+        required: false
+      label:
+        description: "Stage shown after the version (ALPHA, BETA…); empty for a normal release"
+        default: "ALPHA"
+        required: false
+      notes:
+        description: "Release notes (leave empty to list the changes since the last release)"
+        required: false
 
 permissions:
   contents: write
@@ -70,11 +84,35 @@ jobs:
         with:
           name: ${{ matrix.name }}
           path: ${{ env.ASSET }}
-      - name: Attach to the release
-        if: startsWith(github.ref, 'refs/tags/')
-        shell: bash
+
+  release:
+    needs: package
+    if: github.event_name == 'push' || inputs.version != ''
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: Marquee-*
+          merge-multiple: true
+          path: dist
+      - name: Create or update the release
         env:
           GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ inputs.version }}
+          LABEL: ${{ inputs.label }}
+          NOTES: ${{ inputs.notes }}
         run: |
-          gh release view "${{ github.ref_name }}" >/dev/null 2>&1 || gh release create "${{ github.ref_name }}" --title "${{ github.ref_name }}" --generate-notes
-          gh release upload "${{ github.ref_name }}" "$ASSET" --clobber
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = push ]; then
+            TAG="${GITHUB_REF_NAME}"
+            gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" --title "$TAG" --generate-notes --repo "$GITHUB_REPOSITORY"
+          else
+            [[ "$VERSION" =~ ^[0-9]+(\.[0-9]+){1,3}$ ]] || { echo "Version must look like 0.0.3"; exit 1; }
+            TAG="v${VERSION}"; TITLE="$VERSION"; ARGS=()
+            if [ -n "$LABEL" ]; then TAG="${TAG}-$(echo "$LABEL" | tr 'A-Z ' 'a-z-')"; TITLE="$VERSION $LABEL"; ARGS+=(--prerelease); fi
+            if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then echo "Release $TAG already exists"; exit 1; fi
+            if [ -n "$NOTES" ]; then ARGS+=(--notes "$NOTES"); else ARGS+=(--generate-notes); fi
+            gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --title "$TITLE" "${ARGS[@]}"
+          fi
+          gh release upload "$TAG" dist/* --clobber --repo "$GITHUB_REPOSITORY"
+          echo "Released $TAG" >> "$GITHUB_STEP_SUMMARY"
