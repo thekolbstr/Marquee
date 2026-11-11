@@ -25,14 +25,7 @@ jobs:
           dotnet-version: 10.0.x
       # Real ffmpeg so the end-to-end HLS/ffprobe tests actually run instead of returning early.
       - name: Install ffmpeg
-        run: |
-          # The runner's package mirror occasionally stalls; bound every attempt and retry instead of hanging the job.
-          for i in 1 2 3; do
-            timeout 240 sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=20 update \
-              && timeout 300 sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=20 install -y --no-install-recommends ffmpeg && break
-            echo "apt attempt $i failed"; sleep 5
-          done
-          ffmpeg -version | head -1
+        run: scripts/ci-install-ffmpeg.sh
       # The web client is plain JavaScript with no build step; catch syntax errors before they reach a browser.
       - run: node --check src/MediaServer.Api/wwwroot/app.js
       - run: node --check src/MediaServer.Api/wwwroot/live.js
@@ -57,14 +50,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: docker/setup-buildx-action@v3
       - name: Install ffmpeg
-        run: |
-          # The runner's package mirror occasionally stalls; bound every attempt and retry instead of hanging the job.
-          for i in 1 2 3; do
-            timeout 240 sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=20 update \
-              && timeout 300 sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=20 install -y --no-install-recommends ffmpeg && break
-            echo "apt attempt $i failed"; sleep 5
-          done
-          ffmpeg -version | head -1
+        run: scripts/ci-install-ffmpeg.sh
       - id: meta
         uses: docker/metadata-action@v5
         with:

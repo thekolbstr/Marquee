@@ -269,7 +269,7 @@ Wrong match? Find the right id with `GET /api/tmdb/search?type=movie&q=...`, the
 - Set `Auth__SetupCode` before exposing a new server, and `Security__SecretKey` from your secret store.
 - Mount the media read-only; give `/data` (database, artwork) and the transcode folder real disk.
 - For GPU encoding in Docker, give the container access to the NVIDIA runtime and set `Hls__Encoder=nvenc`.
-- CI (`.github/workflows/ci.yml`) runs the tests, lints the web app, builds the image, smoke-tests it and pushes it to `ghcr.io` on `main` and on `m*` and `v*` tags.
+- CI (`.github/workflows/ci.yml`) runs the tests, lints the web app, builds the image, smoke-tests it and pushes it to `ghcr.io` on `main` and on `m*` and `v*` tags. Each image is tagged `sha-<short commit>`, which a GitOps tool such as Argo CD Image Updater can follow.
 
 ## Development
 
