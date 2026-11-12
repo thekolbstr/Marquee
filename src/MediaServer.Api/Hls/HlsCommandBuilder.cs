@@ -35,6 +35,7 @@ public static class HlsCommandBuilder
         if (plan.Live)
             a.AddRange(["-protocol_whitelist", "http,https,tcp,tls,crypto", "-rw_timeout", "15000000", "-reconnect", "1", "-reconnect_streamed", "1",
                         "-reconnect_delay_max", "5", "-fflags", "+genpts+discardcorrupt", "-analyzeduration", "3000000", "-probesize", "3000000"]);
+        if (plan.Video == VideoMode.Encode && o.Encoder == "vaapi") a.InsertRange(a.IndexOf("-y") + 1, ["-vaapi_device", o.VaapiDevice]);
         a.AddRange(["-i", inputPath]);
 
         // Burning in subtitles: the picture and the chosen subtitle stream go through one filter graph; the result is what gets encoded.
@@ -56,6 +57,7 @@ public static class HlsCommandBuilder
             // Downscale only, never upscale. The escaped comma is ffmpeg filtergraph syntax.
             var scale = plan.MaxWidth is { } w ? $"scale=min({w}\\,iw):-2" : $"scale=-2:min({o.MaxHeight}\\,ih)";
             var chain = plan.Deinterlace ? "yadif=0:-1:1," + scale : scale;          // yadif: only frames flagged interlaced are touched
+            if (o.Encoder == "vaapi") chain += ",format=nv12,hwupload";               // filters run on the CPU; the finished frames go to the graphics chip to be encoded
             if (burn) a.AddRange(["-filter_complex", $"[0:{plan.VideoStream}][0:{plan.BurnSubtitle}]overlay=eof_action=pass:repeatlast=0,{chain}[v]"]);
             else a.AddRange(["-vf", chain]);
             var rate = plan.VideoKbps is { } kbps ? new[] { "-maxrate", $"{kbps}k", "-bufsize", $"{kbps * 2}k" } : [];
@@ -64,6 +66,12 @@ public static class HlsCommandBuilder
             if (o.Encoder == "nvenc")
                 a.AddRange(["-c:v", "h264_nvenc", "-preset", "p4", "-rc", "vbr", "-cq", plan.VideoKbps is null ? "23" : "28", "-b:v", "0",
                             "-pix_fmt", "yuv420p", "-profile:v", "high", "-forced-idr", "1", "-force_key_frames", keyframes, .. noB, .. rate]);
+            else if (o.Encoder == "videotoolbox")
+                a.AddRange(["-c:v", "h264_videotoolbox", "-b:v", $"{plan.VideoKbps ?? 8000}k", "-pix_fmt", "yuv420p", "-profile:v", "high", "-allow_sw", "1", "-force_key_frames", keyframes, .. noB]);
+            else if (o.Encoder == "qsv")
+                a.AddRange(["-c:v", "h264_qsv", "-preset", "veryfast", "-global_quality", plan.VideoKbps is null ? "23" : "28", "-pix_fmt", "nv12", "-profile:v", "high", "-force_key_frames", keyframes, .. noB, .. rate]);
+            else if (o.Encoder == "vaapi")
+                a.AddRange(["-c:v", "h264_vaapi", "-qp", plan.VideoKbps is null ? "23" : "28", "-profile:v", "high", "-force_key_frames", keyframes, .. noB, .. rate]);
             else
                 a.AddRange(["-c:v", "libx264", "-preset", o.Preset, "-crf", (plan.VideoKbps is null ? o.Crf : o.Crf + 2).ToString(System.Globalization.CultureInfo.InvariantCulture), "-pix_fmt", "yuv420p",
                             "-profile:v", "high", "-level", "4.1", "-sc_threshold", "0", "-force_key_frames", keyframes, .. noB, .. rate]);
@@ -104,6 +112,25 @@ public static class HlsCommandBuilder
         if (fmp4) a.AddRange(["-hls_fmp4_init_filename", InitName]);
         a.AddRange(["-hls_segment_filename", Path.Combine(outputDir, fmp4 ? "seg%05d.m4s" : "seg%05d.ts"),
                     Path.Combine(outputDir, plan.Vod ? RunPlaylistName : PlaylistName)]);
+        return a;
+    }
+
+    /// <summary>A one-second synthetic encode with the chosen encoder, to find out whether it works on this machine (Maintenance → Test video encoder).</summary>
+    public static List<string> BuildEncoderTest(HlsOptions o)
+    {
+        var a = new List<string> { "-nostdin", "-hide_banner", "-loglevel", "error", "-y" };
+        if (o.Encoder == "vaapi") a.AddRange(["-vaapi_device", o.VaapiDevice]);
+        a.AddRange(["-f", "lavfi", "-i", "testsrc2=size=640x360:rate=25", "-t", "1"]);
+        a.AddRange(["-vf", o.Encoder == "vaapi" ? "format=nv12,hwupload" : "format=yuv420p"]);
+        a.AddRange(o.Encoder switch
+        {
+            "nvenc" => ["-c:v", "h264_nvenc"],
+            "videotoolbox" => ["-c:v", "h264_videotoolbox", "-b:v", "2000k"],
+            "qsv" => ["-c:v", "h264_qsv"],
+            "vaapi" => ["-c:v", "h264_vaapi"],
+            _ => ["-c:v", "libx264", "-preset", "ultrafast"],
+        });
+        a.AddRange(["-f", "null", "-"]);
         return a;
     }
 

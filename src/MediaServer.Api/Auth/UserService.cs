@@ -77,6 +77,8 @@ public sealed class UserService(Database db, IConfiguration config, TimeProvider
         using var tx = c.BeginTransaction();
         Database.Execute(c, tx, "DELETE FROM media_progress WHERE user_id=@i", ("@i", id));
         Database.Execute(c, tx, "DELETE FROM watchlist WHERE user_id=@i", ("@i", id));
+        Database.Execute(c, tx, "DELETE FROM trakt_accounts WHERE user_id=@i", ("@i", id));
+        Database.Execute(c, tx, "DELETE FROM collections WHERE user_id=@i", ("@i", id));   // its items go with it (ON DELETE CASCADE)
         Database.Execute(c, tx, "DELETE FROM sessions WHERE user_id=@i", ("@i", id));
         Database.Execute(c, tx, "DELETE FROM users WHERE id=@i", ("@i", id));
         tx.Commit();

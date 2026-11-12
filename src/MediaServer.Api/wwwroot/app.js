@@ -37,6 +37,7 @@ const ICONS = {
   next: { d: 'M5 5v14l10-7zM19 5v14', fill: true },
   star: { d: 'M12 2.5l2.9 6.1 6.6.9-4.8 4.6 1.2 6.6L12 17.6l-5.9 3.1 1.2-6.6-4.8-4.6 6.6-.9z' },
   list: { d: 'M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01' },
+  collection: { d: 'M4 7a2 2 0 0 1 2-2h4l2 2h6a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2z' },
   close: { d: 'M18 6L6 18M6 6l12 12' },
   pause: { d: 'M7 4h3.5v16H7zM13.5 4H17v16h-3.5z', fill: true },
   rew: { d: 'M3 12a9 9 0 1 0 3-6.7M3 4v5h5' },
@@ -201,7 +202,7 @@ const capsQuery = () => new URLSearchParams(CAPS).toString();
 const IS_SAFARI = /^((?!chrome|chromium|android|crios|fxios|edg).)*safari/i.test(navigator.userAgent);
 
 // Menu icons: added here so the links in index.html stay plain text.
-const NAV_ICONS = { home: 'home', movies: 'film', shows: 'tv', mylist: 'list', live: 'live', recordings: 'rec', downloads: 'download' };
+const NAV_ICONS = { home: 'home', movies: 'film', shows: 'tv', mylist: 'list', collections: 'collection', live: 'live', recordings: 'rec', downloads: 'download' };
 document.querySelectorAll('#nav a').forEach((a) => a.prepend(h('span', { class: 'nav-ico' }, icon(NAV_ICONS[a.dataset.route] || 'play'))));
 
 // ================================================================ router
@@ -230,7 +231,7 @@ async function route() {
   document.title = APP.name;
   const { parts, params } = parseHash();
   const [page, arg] = parts;
-  const section = !page ? 'home' : page === 'movies' || page === 'movie' ? 'movies' : page === 'shows' || page === 'series' ? 'shows' : page === 'live' ? 'live' : page === 'mylist' ? 'mylist' : page === 'recordings' ? 'recordings' : page === 'downloads' ? 'downloads' : '';
+  const section = !page ? 'home' : page === 'movies' || page === 'movie' ? 'movies' : page === 'shows' || page === 'series' ? 'shows' : page === 'live' ? 'live' : page === 'mylist' ? 'mylist' : page === 'collections' || page === 'collection' ? 'collections' : page === 'recordings' ? 'recordings' : page === 'downloads' ? 'downloads' : '';
   document.querySelectorAll('#nav a').forEach((a) => a.classList.toggle('active', a.dataset.route === section));
   if (page !== 'search') $('#search').value = '';
   else if (document.activeElement !== $('#search')) $('#search').value = arg || '';
@@ -244,6 +245,8 @@ async function route() {
     else if (page === 'system') location.replace('#/settings/system');
     else if (page === 'settings') await showSettings(arg);
     else if (page === 'mylist') await showMyList();
+    else if (page === 'collections') await showCollections();
+    else if (page === 'collection' && arg) await showCollection(arg);
     else if (page === 'recordings') await showRecordings();
     else if (page === 'downloads') await showDownloads(params);
     else if (page === 'welcome') await showWelcome();
@@ -261,6 +264,15 @@ async function route() {
 const scanBtn = $('#scanbtn');
 const sysBtn = h('a', { class: 'icon-btn', href: '#/settings', title: 'Settings', 'aria-label': 'Settings' }, icon('gear'));
 scanBtn.before(sysBtn);
+// A dot on the cog when a newer release is out (administrators only; the answer is cached on the server for hours).
+async function checkForUpdate() {
+  try {
+    const u = await api('/api/system/update');
+    APP.update = u.newer ? u : null;
+    sysBtn.classList.toggle('has-update', !!u.newer);
+    sysBtn.title = u.newer ? `Settings · version ${u.latest} is available` : 'Settings';
+  } catch { /* offline, or not an administrator: no badge */ }
+}
 scanBtn.append(icon('refresh'));
 let scanWatcher = null;
 
@@ -653,7 +665,7 @@ async function showMovie(id) {
           h('div', { class: 'detail-actions' },
             h('a', { class: 'btn', href: `#/watch/${f.mediaId}` }, icon('play'), resume ? `Resume · ${fmtLeft(f.resumeSeconds, f.durationSeconds) || fmtRuntime(f.resumeSeconds)}` : 'Play'),
             resume ? h('a', { class: 'btn glass', href: `#/watch/${f.mediaId}?t=0` }, 'Start over') : null,
-            myListButton('movie', String(f.mediaId), listed))))),
+            myListButton('movie', String(f.mediaId), listed), collectionsButton('movie', String(f.mediaId)))))),
     info);
 }
 
@@ -706,7 +718,7 @@ async function showSeries(key) {
               const pool = fresh.length ? fresh : all;
               location.hash = `#/watch/${pool[Math.floor(Math.random() * pool.length)].mediaId}`;
             } }, icon('dice'), 'Random episode'),
-            myListButton('series', key, listed)) : null))),
+            myListButton('series', key, listed), collectionsButton('series', key)) : null))),
     h('div', { class: 'section' }, h('div', { class: 'seasonbar' }, pills, watchedMenu(key, () => s.seasons[current], () => route())), list));
   renderSeason();
 }
@@ -768,6 +780,7 @@ function startApp() {
   api('/api/library/status').then((s) => { if (s.scanning) watchScan(false); }).catch(() => {});
   loadLiveStatus(); // reveals the Live TV link when a source is configured
   loadArrStatus();  // ...and Downloads, when Radarr or Sonarr is
+  if (isAdmin()) checkForUpdate();
 }
 
 // Decide what to show first: the one-time setup, the sign-in form, or the app.

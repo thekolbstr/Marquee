@@ -42,8 +42,8 @@ const skipSeconds = () => Math.min(60, Math.max(5, parseInt(pref('skip'), 10) ||
 // ================================================================ the page
 const SECTIONS = [
   ['appearance', 'Appearance', 'device'], ['home', 'Home page', 'device'], ['playback', 'Playback', 'device'], ['captions', 'Captions', 'device'], ['shortcuts', 'Keyboard shortcuts', 'device'],
-  ['general', 'General', 'server'], ['users', 'People', 'server'], ['activity', 'Watch activity', 'server'], ['library', 'Library', 'server'], ['metadata', 'Posters & details', 'server'], ['streaming', 'Streaming & playback', 'server'], ['livetv', 'Live TV & recording', 'server'], ['downloads', 'Downloads', 'server'],
-  ['network', 'Network & security', 'server'], ['maintenance', 'Maintenance', 'server'], ['logs', 'Logs', 'server'], ['system', 'System & about', 'server'],
+  ['general', 'General', 'server'], ['users', 'People', 'server'], ['activity', 'Watch activity', 'server'], ['library', 'Library', 'server'], ['metadata', 'Posters & details', 'server'], ['streaming', 'Streaming & playback', 'server'], ['livetv', 'Live TV & recording', 'server'], ['subtitles', 'Subtitle downloads', 'server'], ['notifications', 'Notifications', 'server'], ['trakt', 'Trakt', 'server'], ['downloads', 'Downloads', 'server'],
+  ['network', 'Network & security', 'server'], ['health', 'Library health', 'server'], ['maintenance', 'Maintenance', 'server'], ['logs', 'Logs', 'server'], ['system', 'System & about', 'server'],
   ['account', 'Account & devices', 'account'],
 ];
 
@@ -67,6 +67,7 @@ async function showSettings(section) {
   else if (current === 'account') await accountPanel(body);
   else if (current === 'users') await usersPanel(body);
   else if (current === 'activity') await activityPanel(body);
+  else if (current === 'health') healthPanel(body);
   else if (current === 'maintenance') maintenancePanel(body);
   else if (current === 'logs') await logsPanel(body);
   else if (current === 'system') await systemPanel(body);
@@ -380,6 +381,29 @@ function skipTask() {
     h('div', { class: 'task-btns' }, act('scan-skips', 'Search now'), act('clear-skips', 'Forget')));
 }
 
+// ================================================================ library health
+async function healthPanel(body) {
+  body.append(h('h2', {}, 'Library health'), h('p', { class: 'hint' }, 'A look at what is in your library. Nothing here changes or deletes a file: it only tells you what to tidy up yourself.'));
+  const box = h('div', {}, h('p', { class: 'hint' }, 'Looking…'));
+  body.append(box);
+  let r;
+  try { r = await api('/api/system/library-health', { timeoutMs: 120000 }); } catch (e) { box.replaceChildren(h('p', { class: 'save-status bad' }, e.message)); return; }
+  const files = (list) => h('ul', { class: 'health-list' }, list.map((f) => h('li', {}, h('a', { href: `#/watch/${f.id}` }, f.name), h('small', {}, ` ${fmtBytes(f.sizeBytes)}${f.detail ? ` · ${f.detail}` : ''}`))));
+  const section = (title, summary, content, open) => h('details', { class: 'panel health', open: open ? '' : null }, h('summary', {}, h('strong', {}, title), h('span', { class: 'muted' }, ` ${summary}`)), content);
+  box.replaceChildren(
+    h('p', {}, `${r.totalFiles.toLocaleString()} files in the library.`),
+    section('Duplicates', r.duplicates.length ? `${r.duplicates.length} title${r.duplicates.length === 1 ? '' : 's'} on disk twice or more, about ${fmtBytes(r.duplicateWastedBytes)} that a single copy would free` : 'none found',
+      r.duplicates.length ? h('div', {}, r.duplicates.map((g) => h('div', { class: 'dupe' }, h('strong', {}, g.title), files(g.files)))) : h('p', { class: 'hint' }, 'Every film and episode exists once.'), r.duplicates.length > 0),
+    section('Files that could not be read', r.unreadableCount ? `${r.unreadableCount} file${r.unreadableCount === 1 ? '' : 's'}` : 'none',
+      r.unreadableCount ? h('div', {}, files(r.unreadable), r.unreadableCount > r.unreadable.length ? h('p', { class: 'hint' }, `…and ${r.unreadableCount - r.unreadable.length} more.`) : null) : h('p', { class: 'hint' }, 'Every file was analysed.'), r.unreadableCount > 0),
+    section('Needs converting to play', r.needsTranscodingCount ? `${r.needsTranscodingCount} file${r.needsTranscodingCount === 1 ? '' : 's'} a typical browser cannot decode` : 'none',
+      r.needsTranscodingCount ? h('div', {}, h('p', { class: 'hint' }, 'These play fine on devices that can decode them. On a browser that cannot, the server re-encodes them as you watch, which is heavy without a graphics chip. See Streaming & playback.'), files(r.needsTranscoding),
+        r.needsTranscodingCount > r.needsTranscoding.length ? h('p', { class: 'hint' }, `…and ${r.needsTranscodingCount - r.needsTranscoding.length} more.`) : null) : h('p', { class: 'hint' }, 'Everything plays directly or with the video untouched.')),
+    r.tmdbConfigured
+      ? section('Not matched to TMDB', r.unmatched ? `${r.unmatched} file${r.unmatched === 1 ? '' : 's'}` : 'none', r.unmatched ? h('p', {}, h('a', { class: 'btn glass small', href: '#/unmatched' }, 'Open the list and fix matches')) : h('p', { class: 'hint' }, 'Every title has artwork and details.'), false)
+      : section('Not matched to TMDB', 'TMDB is not set up', h('p', { class: 'hint' }, 'Add a TMDB token under Posters & details to get artwork and descriptions.'), false));
+}
+
 function maintenancePanel(body) {
   const task = (title, text, button, id, confirmText, danger) => {
     const out = h('p', { class: 'save-status' });
@@ -392,6 +416,8 @@ function maintenancePanel(body) {
     h('div', { class: 'task' }, h('div', { class: 'task-text' }, h('strong', {}, 'Scan the library'), h('p', {}, 'Look for new, moved and removed files now.'), scanOut),
       h('button', { class: 'btn glass', type: 'button', onclick: () => { scanBtn.click(); scanOut.textContent = 'Scan started.'; scanOut.className = 'save-status good'; } }, 'Scan now')),
     skipTask(),
+    task('Send a test notification', 'Sends a short message with the service chosen under Notifications.', 'Send', 'test-notification'),
+    task('Test video encoder', 'Tries a one-second encode with the encoder chosen under Streaming, so you know it works before someone needs a transcode.', 'Test', 'test-encoder'),
     h('div', { class: 'task' }, h('div', { class: 'task-text' }, h('strong', {}, 'Refresh Live TV'), h('p', {}, 'Re-import the channel list and programme guide.'), liveOut),
       h('button', { class: 'btn glass', type: 'button', onclick: async () => {
         liveOut.className = 'save-status'; liveOut.textContent = 'Fetching…';
@@ -443,6 +469,7 @@ async function systemPanel(body) {
   const wrap = h('div');
   body.append(h('h2', {}, 'System & about'), wrap, about);
   await mountSystem(wrap);
+  updatePanel(body, wrap);
   try {
     const a = await api('/api/system/about');
     const v = /^[0-9a-f]{40}$/.test(a.version) ? a.version.slice(0, 7) : a.version;
@@ -451,6 +478,33 @@ async function systemPanel(body) {
       ['This browser', `${BROWSER_NAME()} · ${CAPS.v || 'no'} video · ${CAPS.a || 'no'} audio`],
     ].map(([k, val]) => [h('dt', {}, k), h('dd', {}, String(val))])));
   } catch { /* about is optional */ }
+}
+// "Is there a newer version?" Checks GitHub (cached for hours on the server); nothing is downloaded or installed for you.
+async function updatePanel(body, before) {
+  const out = h('p', { class: 'save-status' });
+  const panel = h('div', { class: 'panel' }, h('h3', {}, 'Updates'));
+  before.after(panel);
+  const draw = (u) => {
+    const lines = [];
+    if (!u.enabled) lines.push(h('p', { class: 'hint' }, 'Update checks are off. Turn on “Check for updates” under General to be told when a new version is out.'));
+    else {
+      lines.push(h('p', {}, u.newer ? `Version ${u.latest} is available. You are running ${u.current}.` : u.latest ? `You are up to date (${u.current}).` : 'No releases found yet.'));
+      if (u.error) lines.push(h('p', { class: 'save-status bad' }, u.error));
+      if (u.newer) {
+        lines.push(h('div', { class: 'detail-actions' },
+          u.downloadUrl ? h('a', { class: 'btn', href: u.downloadUrl, rel: 'noopener' }, `Download ${u.downloadName}`) : null,
+          u.url ? h('a', { class: 'btn glass', href: u.url, target: '_blank', rel: 'noopener' }, 'Release notes') : null));
+        lines.push(h('p', { class: 'hint' }, 'To update, unpack the new version over the old one and keep the data folder. In Docker, pull the new image.'));
+        if (u.notes) lines.push(h('pre', { class: 'notes' }, u.notes));
+      }
+    }
+    panel.replaceChildren(h('h3', {}, 'Updates'), ...lines.filter(Boolean),
+      u.enabled ? h('button', { class: 'btn glass small', type: 'button', onclick: async () => {
+        out.className = 'save-status'; out.textContent = 'Checking…';
+        try { const fresh = await api('/api/system/update/check', { method: 'POST' }); draw(fresh); document.querySelector('#top a[href="#/settings"]')?.classList.toggle('has-update', !!fresh.newer); } catch (e) { out.textContent = e.message; out.className = 'save-status bad'; }
+      } }, 'Check now') : null, out);
+  };
+  try { draw(await api('/api/system/update')); } catch { panel.remove(); }
 }
 const BROWSER_NAME = () => { const u = navigator.userAgent; return /Edg\//.test(u) ? 'Edge' : /Chrome\//.test(u) ? 'Chrome' : /Firefox\//.test(u) ? 'Firefox' : /Safari\//.test(u) ? 'Safari' : 'Browser'; };
 
@@ -464,7 +518,7 @@ function describeDevice(ua) {
 
 async function accountPanel(body) {
   if (!AUTH.enabled) {
-    body.append(h('h2', {}, 'Account & devices'), h('p', { class: 'hint' }, 'Sign-in is turned off for this server (Auth__Enabled=false), so there is no account to manage. Anyone who can reach this page can use the server and change its settings.'), resetBlock());
+    body.append(h('h2', {}, 'Account & devices'), h('p', { class: 'hint' }, 'Sign-in is turned off for this server (Auth__Enabled=false), so there is no account to manage. Anyone who can reach this page can use the server and change its settings.'), await traktBlock(), resetBlock());
     return;
   }
   const cur = passwordField('Current password', { autocomplete: 'current-password' });
@@ -513,8 +567,56 @@ async function accountPanel(body) {
     h('h3', { class: 'sub' }, 'Change password'),
     h('div', { class: 'pwform' }, cur.el, n1.el, n2.el, h('div', { class: 'actions-row flush' }, btn, out)),
     h('h3', { class: 'sub' }, 'Security'), await twoFactorBlock(),
+    await traktBlock(),
     resetBlock());
   loadDevices();
+}
+
+// ---- Trakt.tv: connect your own account with a code you type on trakt.tv (Marquee never sees your Trakt password)
+async function traktBlock() {
+  const box = h('div', {}, h('h3', { class: 'sub' }, 'Trakt'));
+  let st;
+  try { st = await api('/api/trakt/status'); } catch { return h('div'); }
+  const out = h('p', { class: 'save-status' });
+  const say = (text, bad) => { out.textContent = text; out.className = 'save-status ' + (bad ? 'bad' : 'good'); };
+  const draw = (extra) => {
+    if (!st.configured) { box.replaceChildren(h('h3', { class: 'sub' }, 'Trakt'), h('p', { class: 'hint' }, isAdmin() ? 'To use Trakt, add a Client ID and secret under Settings → Trakt first.' : 'Trakt has not been set up by the person who runs this server.')); return; }
+    if (st.connected) {
+      box.replaceChildren(h('h3', { class: 'sub' }, 'Trakt'), h('p', {}, 'Connected. Titles you finish watching here are added to your Trakt history.'),
+        h('div', { class: 'actions-row flush' },
+          h('button', { class: 'btn glass small', type: 'button', onclick: async (e) => {
+            e.target.disabled = true; say('Importing…');
+            try { const r = await (async () => { const res = await fetch('/api/trakt/import', { method: 'POST' }); const j = await res.json().catch(() => ({})); if (!res.ok) throw new Error(j.error || 'The import did not work.'); return j; })();
+              say(`Marked ${r.movies} film${r.movies === 1 ? '' : 's'} and ${r.episodes} episode${r.episodes === 1 ? '' : 's'} as watched.`); } catch (err) { say(err.message, true); }
+            e.target.disabled = false;
+          } }, 'Import what I’ve watched'),
+          h('button', { class: 'btn glass small red', type: 'button', onclick: async () => { await fetch('/api/trakt', { method: 'DELETE' }); st.connected = false; draw(); } }, 'Disconnect')), out);
+      return;
+    }
+    box.replaceChildren(h('h3', { class: 'sub' }, 'Trakt'), h('p', { class: 'hint' }, 'Keep your Trakt history in step with what you watch here.'),
+      extra || h('div', { class: 'actions-row flush' }, h('button', { class: 'btn glass small', type: 'button', onclick: connect }, 'Connect to Trakt'), out));
+  };
+  async function connect() {
+    let d;
+    try { const res = await fetch('/api/trakt/connect', { method: 'POST' }); d = await res.json(); if (!res.ok) throw new Error(d.error || 'Could not start.'); } catch (e) { say(e.message, true); return; }
+    const status = h('p', { class: 'save-status' }, 'Waiting for you to enter the code…');
+    draw(h('div', {}, h('p', {}, 'On any device, open ', h('a', { href: d.verificationUrl, target: '_blank', rel: 'noopener' }, d.verificationUrl), ' and enter this code:'), h('p', { class: 'trakt-code' }, d.userCode), status));
+    const until = Date.now() + d.expiresInSeconds * 1000;
+    const tick = async () => {
+      if (!box.isConnected) return;
+      if (Date.now() > until) { status.textContent = 'The code expired. Start again.'; status.className = 'save-status bad'; return; }
+      try {
+        const res = await fetch('/api/trakt/poll', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ deviceCode: d.deviceCode }) });
+        const j = await res.json().catch(() => ({}));
+        if (j.status === 'connected') { st.connected = true; draw(); toast('Connected to Trakt'); return; }
+        if (j.status === 'expired' || j.status === 'denied') { status.textContent = j.status === 'denied' ? 'That was declined on Trakt.' : 'The code expired. Start again.'; status.className = 'save-status bad'; return; }
+      } catch { /* keep trying until the code expires */ }
+      setTimeout(tick, Math.max(3, d.intervalSeconds) * 1000);
+    };
+    setTimeout(tick, Math.max(3, d.intervalSeconds) * 1000);
+  }
+  draw();
+  return box;
 }
 
 function resetBlock() {

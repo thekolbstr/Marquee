@@ -42,7 +42,7 @@ public sealed class SettingsEndpointTests : IDisposable
     public async Task ListsGroupedSettings_WithTheDeploymentValueAndItsSource()
     {
         var j = await _c.GetFromJsonAsync<JsonElement>("/api/settings");
-        Assert.Equal(["general", "library", "metadata", "streaming", "livetv", "downloads", "network"], j.GetProperty("groups").EnumerateArray().Select(g => g.GetProperty("id").GetString()));
+        Assert.Equal(["general", "library", "metadata", "streaming", "livetv", "subtitles", "trakt", "notifications", "downloads", "network"], j.GetProperty("groups").EnumerateArray().Select(g => g.GetProperty("id").GetString()));
         var i = await Item("Library:ScanIntervalMinutes");
         Assert.Equal(("123", "deployment"), (i.GetProperty("value").GetString(), i.GetProperty("source").GetString()));
         Assert.Equal("default", (await Item("LiveTv:RefreshMinutes")).GetProperty("source").GetString());

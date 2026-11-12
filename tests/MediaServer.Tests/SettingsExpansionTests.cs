@@ -29,7 +29,7 @@ public sealed class SettingsCatalogTests
         Assert.All(SettingsService.Defs, d =>
         {
             Assert.False(string.IsNullOrWhiteSpace(d.Label)); Assert.False(string.IsNullOrWhiteSpace(d.Help));
-            Assert.Contains(d.Group, new[] { "general", "library", "metadata", "streaming", "livetv", "downloads", "network" });
+            Assert.Contains(d.Group, new[] { "general", "library", "metadata", "streaming", "livetv", "subtitles", "notifications", "trakt", "downloads", "network" });
         });
         Assert.Equal(SettingsService.Defs.Count, SettingsService.Defs.Select(d => d.Key).Distinct(StringComparer.OrdinalIgnoreCase).Count());
     }
@@ -52,7 +52,7 @@ public sealed class SettingsCatalogTests
 
     [Theory]
     [InlineData("Tmdb:Language", "xx-YY", false)] [InlineData("Tmdb:Language", "fr-FR", true)] [InlineData("Tmdb:Language", "en-US'; DROP", false)]
-    [InlineData("Hls:Encoder", "nvenc", true)] [InlineData("Hls:Encoder", "rm -rf", false)] [InlineData("Hls:Encoder", "vaapi", false)]
+    [InlineData("Hls:Encoder", "nvenc", true)] [InlineData("Hls:Encoder", "rm -rf", false)] [InlineData("Hls:Encoder", "vaapi", true)] [InlineData("Hls:Encoder", "videotoolbox", true)] [InlineData("Hls:Encoder", "qsv", true)] [InlineData("Hls:Encoder", "h265", false)]
     [InlineData("Hls:MaxHeight", "720", true)] [InlineData("Hls:MaxHeight", "100000", false)] [InlineData("Hls:MaxSessions", "0", false)] [InlineData("Hls:MaxSessions", "17", false)] [InlineData("Hls:MaxSessions", "4", true)]
     [InlineData("Playback:WatchedPercent", "49", false)] [InlineData("Playback:WatchedPercent", "100", true)] [InlineData("Auth:SessionDays", "400", false)] [InlineData("Auth:IdleHours", "0", false)]
     [InlineData("General:ServerName", "Home Cinema", true)] [InlineData("Auth:TrustProxy", "true", true)] [InlineData("Auth:TrustProxy", "yes", false)]

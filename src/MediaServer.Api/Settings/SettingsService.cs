@@ -54,6 +54,8 @@ public sealed class SettingsService(Database db, DbSettingsProvider provider, IC
         // general
         new("General:ServerName", "general", "Server name", "Shown in the header, the browser tab and on the sign-in page.", SettingKind.Text, Placeholder: "MediaServer"),
 
+        new("Updates:Check", "general", "Check for updates", "Now and then, ask GitHub whether a newer version of Marquee has been released, and say so in Settings. Nothing is downloaded or installed, and nothing about you or your library is sent.", SettingKind.Bool, Default: "true"),
+
         new("General:LoginMessage", "general", "Sign-in message", "Optional. A short note shown under the sign-in form, such as who to ask for an account.", SettingKind.Text, Placeholder: "Ask Alex if you need an account"),
 
         // library
@@ -72,7 +74,8 @@ public sealed class SettingsService(Database db, DbSettingsProvider provider, IC
 
         // streaming
         new("Hls:AllowTranscoding", "streaming", "Allow transcoding", "Re-encoding video is what makes a server work hard. Turn it off and only files a device can play directly (or with the video copied) will play.", SettingKind.Bool, Default: "true"),
-        new("Hls:Encoder", "streaming", "Video encoder", "Software works everywhere. NVIDIA needs a GPU and the NVIDIA container runtime; if it isn't available, transcodes fail.", SettingKind.Choice, Default: "libx264", Options: Opt(("libx264", "Software (CPU)"), ("nvenc", "NVIDIA GPU (NVENC)"))),
+        new("Hls:Encoder", "streaming", "Video encoder", "Software works everywhere. A graphics chip does the work with far less CPU, but must be present (and, in Docker, passed through to the container). Use Maintenance → Test video encoder to check your choice; if it isn't available, transcodes fail.", SettingKind.Choice, Default: "libx264",
+            Options: Opt(("libx264", "Software (CPU)"), ("nvenc", "NVIDIA GPU (NVENC)"), ("videotoolbox", "Apple (VideoToolbox)"), ("qsv", "Intel (Quick Sync)"), ("vaapi", "Intel / AMD on Linux (VAAPI)"))),
         new("Hls:MaxSessions", "streaming", "Simultaneous streams", "Starting one more stops the one nobody has touched the longest. Live TV counts as a stream.", SettingKind.Int, 1, 16, Default: "2"),
         new("Hls:MaxHeight", "streaming", "Largest transcode", "Transcodes are scaled down to this height. Originals that don't need transcoding are never changed.", SettingKind.Choice, Default: "1080", Options: Opt(("480", "480p"), ("720", "720p"), ("1080", "1080p"), ("1440", "1440p"), ("2160", "4K"))),
         new("Hls:Preset", "streaming", "Encoding speed", "Software transcodes only. Slower gives a smaller or nicer picture at the same quality but uses a lot more CPU. “Very fast” suits most servers.", SettingKind.Choice, Default: "veryfast",
@@ -101,6 +104,26 @@ public sealed class SettingsService(Database db, DbSettingsProvider provider, IC
         new("Recordings:MinFreeGb", "livetv", "Stop recording when free space is below", "Protects the disk: a recording that would leave less than this free is not started.", SettingKind.Int, 0, 10000, Default: "2", Unit: "GB"),
         new("Recordings:KeepDays", "livetv", "Delete recordings after", "0 keeps them until you delete them yourself.", SettingKind.Int, 0, 3650, Default: "0", Unit: "days"),
 
+        // subtitle downloads
+        new("Subtitles:OpenSubtitlesApiKey", "subtitles", "OpenSubtitles API key", "Free from opensubtitles.com/consumers (create an account, then add an API consumer).", SettingKind.Secret),
+        new("Subtitles:OpenSubtitlesUsername", "subtitles", "OpenSubtitles username", "Your opensubtitles.com account. Downloads need to be signed in, and OpenSubtitles limits how many a day your account may make.", SettingKind.Text),
+        new("Subtitles:OpenSubtitlesPassword", "subtitles", "OpenSubtitles password", "Stored encrypted. Only sent to OpenSubtitles.", SettingKind.Secret),
+        new("Subtitles:Language", "subtitles", "Subtitle language", "What the search looks for first. You can change it in the search itself.", SettingKind.Choice, Default: "en",
+            Options: Opt(("en", "English"), ("es", "Español"), ("fr", "Français"), ("de", "Deutsch"), ("it", "Italiano"), ("pt-br", "Português (Brasil)"), ("pt-pt", "Português"), ("nl", "Nederlands"), ("sv", "Svenska"), ("pl", "Polski"), ("ru", "Русский"), ("tr", "Türkçe"), ("ja", "日本語"), ("ko", "한국어"), ("zh-cn", "中文"))),
+
+        // trakt
+        new("Trakt:ClientId", "trakt", "Client ID", "Create a free app at trakt.tv/oauth/applications (set the redirect URI to urn:ietf:wg:oauth:2.0:oob), then copy its Client ID here.", SettingKind.Secret),
+        new("Trakt:ClientSecret", "trakt", "Client secret", "From the same Trakt app page. Stored encrypted.", SettingKind.Secret),
+
+        // notifications
+        new("Notify:Service", "notifications", "Send notifications with", "Gotify and ntfy are free, self-hostable push services; a webhook posts the message as JSON to any address (Home Assistant, n8n, Discord via a relay…).", SettingKind.Choice, Default: "off",
+            Options: Opt(("off", "Nothing"), ("gotify", "Gotify"), ("ntfy", "ntfy"), ("webhook", "Webhook (JSON)"))),
+        new("Notify:Url", "notifications", "Address", "Gotify: the server's address, such as http://gotify:80. ntfy: the topic, such as https://ntfy.sh/my-marquee. Webhook: the full address to post to. It may contain a secret, so it is never shown again once saved.", SettingKind.SecretUrl, Placeholder: "http://gotify:80"),
+        new("Notify:Token", "notifications", "Token", "Gotify: an application token. ntfy: an access token (only if the topic needs one). Webhook: sent as a Bearer token (optional).", SettingKind.Secret),
+        new("Notify:OnRecording", "notifications", "When a recording finishes or fails", "A short message with the programme's name.", SettingKind.Bool, Default: "true"),
+        new("Notify:OnNewTitles", "notifications", "When new files are added to the library", "Not sent for the first scan of an empty library.", SettingKind.Bool, Default: "true"),
+        new("Notify:OnUpdate", "notifications", "When a new version of Marquee is out", "Needs “Check for updates” under General.", SettingKind.Bool, Default: "true"),
+
         // downloads (Radarr / Sonarr)
         new("Radarr:Url", "downloads", "Radarr address", "Where Radarr (movies) runs, as this server sees it.", SettingKind.Url, Placeholder: "http://radarr:7878"),
         new("Radarr:ApiKey", "downloads", "Radarr API key", "Radarr → Settings → General → API Key. It's never shown again once saved.", SettingKind.Secret),
@@ -123,6 +146,9 @@ public sealed class SettingsService(Database db, DbSettingsProvider provider, IC
         ("metadata", "Posters & details", "Artwork, descriptions, ratings and episode info come from TMDB. It's free: create an account and copy a key."),
         ("streaming", "Streaming & playback", "How the server delivers video to your devices."),
         ("livetv", "Live TV", "Watch channels from any M3U playlist with an XMLTV guide, such as an IPTV service or Dispatcharr."),
+        ("subtitles", "Subtitle downloads", "Find subtitles for a title from the player. Uses your own free OpenSubtitles account; downloads are kept in Marquee's data folder."),
+        ("trakt", "Trakt", "Keep your Trakt.tv history in step with what you watch here. After saving these, each person connects their own Trakt account under Account & devices."),
+        ("notifications", "Notifications", "Get a message on your phone or in your chat when a recording finishes, new files arrive or an update is out. Use the Test button under Maintenance to check it works."),
         ("downloads", "Downloads (Radarr & Sonarr)", "Connect your download managers to see what's coming, add titles from here, and have new files appear in the library as soon as they're imported."),
         ("network", "Network & security", "Sign-in sessions and how the server sees its visitors."),
     ];

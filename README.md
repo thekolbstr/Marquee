@@ -74,12 +74,14 @@ After that, everyone signs in on the login page. Add more people under **Setting
 - **Automatic scanning**: shortly after startup and every `Library:ScanIntervalMinutes` (default 360). Scans find new, changed, moved and deleted files, and are fast when nothing changed. The refresh button scans on demand. Scans run in the background, so closing the tab never interrupts one.
 - **Several folders**: the one the deployment mounts is always included; add more from Settings → Library (browse what the server can see). Folders can be hidden, shown again or removed. An offline drive or share is skipped rather than emptying your library. Overlapping, system and Marquee's own folders are refused.
 - **Artwork without TMDB**: cards and banners use a frame grabbed from the video. With a [TMDB](https://www.themoviedb.org) token you get real posters, backdrops, descriptions, genres and ratings, and the UI switches to poster cards. Titles that can't be matched are listed under *Needs a match*; open one and choose **Fix match** to pick the right entry (for a show, this applies to every episode).
+- **Collections**: group films and shows your own way ("Christmas films", "Studio Ghibli"). Open a title and choose **Collections**; each person has their own.
 - **Watch progress is kept on the server**, so Continue Watching and resume follow you between browsers. "Up next" appears when the latest episode of a show is finished. **My List** and **Watched…** (mark a season or whole show watched or unwatched) are on every show page.
 
 ### The player
 
 - Keyboard: space/k play, j/l or arrows seek, f fullscreen, m mute, n next, c captions, i stats, Esc back.
 - **Skip intro / Skip credits** when the file has chapters named like "Opening" or "Credits", **seek-bar previews**, **audio track** and **subtitle** menus, **playback speed**, and a **quality** picker.
+- **Find subtitles**: with a free OpenSubtitles account (Settings → Subtitle downloads), the Subtitles menu can search for and download subtitles for the title you are watching. They are kept in Marquee's data folder, never next to your files. A **Delay** control shifts any subtitle earlier or later.
 - **Captions**: text tracks inside the file and `.srt` / `.vtt` / `.ass` files next to it (`Movie.en.srt`) are converted to WebVTT on demand. Picture subtitles (PGS, DVD) can be burned into the video (this re-encodes it).
 - **Cast to a TV**: the server finds Chromecasts and TVs with Chromecast built in, and plays on them for you, from any browser (see [Casting to a TV](#casting-to-a-tv)). AirPlay in Safari.
 - **Stats for nerds** (the cog, or `I`): play mode and why, source and output formats, bitrate, decoded vs displayed size, dropped frames, buffer, network speed, encoder and segment progress, and the browser's capabilities, with a Copy button for bug reports.
@@ -107,6 +109,14 @@ Point Marquee at an IPTV source (for example Dispatcharr) and it adds a **Live T
 ### Radarr and Sonarr
 
 Settings → Downloads: save each app's address and API key (Sonarr v4). **Downloads** in the menu then shows what's downloading and what's coming in the next three weeks, and lets you search for a movie or show and add it with the quality and folder you choose. Add the webhook address shown in Settings to each app (Connect → Webhook, "On Import") and new files appear in your library within seconds. A search that finds nothing offers to look in Radarr and Sonarr.
+
+### Notifications, Trakt and housekeeping
+
+- **Notifications** (Settings → Notifications): a message through Gotify, ntfy or a JSON webhook when a recording finishes or fails, when new files are added to the library, and when an update is out. Each can be switched off. Only titles and counts are sent.
+- **Trakt**: an administrator adds a Trakt app's client id and secret (Settings → Trakt); each person then connects their own account with a code they enter on trakt.tv. Titles you finish watching are added to your Trakt history, and **Import what I've watched** marks what Trakt lists as watched here. Only TMDB ids, season and episode numbers and the time go to Trakt, and it never un-watches anything.
+- **Update check**: administrators see a dot on the settings cog and a panel under System & about when a newer release exists, with the right download for their system. Nothing is downloaded or installed for you. Turn it off with *Check for updates* under General (the only request is to the GitHub Releases API).
+- **Library health** (Settings → Library health): duplicates, files that could not be analysed, files a typical browser cannot play without converting, and titles not matched to TMDB. It only reports; it never changes a file.
+- **Hardware transcoding**: Settings → Streaming & playback → *Video encoder* can use NVIDIA (NVENC), Apple (VideoToolbox), Intel (Quick Sync) or VAAPI on Linux. *Test video encoder* under Maintenance checks that your choice works. For VAAPI in Docker, pass `/dev/dri` through to the container; the render node defaults to `/dev/dri/renderD128` (`Hls__VaapiDevice` to change it).
 
 ### People, activity and appearance
 
@@ -200,7 +210,7 @@ The browser reports what it can decode (`?v=h264,hevc&a=aac,eac3&c=mp4,mkv`, det
 
 1. **Direct play** (`GET /stream/{id}`, with `Range` requests): the container, video and default audio track are all supported. The file is served as is; no server work.
 2. **Direct stream** (`POST /api/hls/start`): the video is supported but the container or audio isn't (for example HEVC + EAC3 in MKV). The video is **copied untouched** into HLS (HEVC into fMP4 tagged `hvc1`, H.264 into MPEG-TS) and only the audio is converted to stereo AAC. Nearly free, no GPU.
-3. **Transcode**: only when the browser cannot decode the video at all (for example HEVC in Firefox, VC-1, 4:4:4 or old MPEG-4 AVIs). Video goes to 8-bit H.264 (`Hls__Encoder=nvenc` uses the GPU), audio to AAC.
+3. **Transcode**: only when the browser cannot decode the video at all (for example HEVC in Firefox, VC-1, 4:4:4 or old MPEG-4 AVIs). Video goes to 8-bit H.264 (`Hls__Encoder` can use a hardware encoder), audio to AAC.
 
 If a browser claims support and then fails, the player steps down automatically: direct play, then direct stream, then transcode. No browser decodes VC-1, MPEG-4 Part 2, DTS or TrueHD, so those always need the video or audio converted. Safari plays HLS through its native player (HEVC in fMP4 needs it); other browsers use the bundled hls.js.
 
@@ -212,7 +222,8 @@ If a browser claims support and then fails, the player steps down automatically:
 
 | Setting | Default | Meaning |
 |---|---|---|
-| `Hls__Encoder` | `libx264` | `nvenc` uses `h264_nvenc` (needs an ffmpeg with NVENC and GPU access) |
+| `Hls__Encoder` | `libx264` | `nvenc`, `videotoolbox`, `qsv` or `vaapi` use the matching hardware H.264 encoder (needs an ffmpeg built with it, and access to the hardware) |
+| `Hls__VaapiDevice` | `/dev/dri/renderD128` | The render node VAAPI uses |
 | `Hls__MaxSessions` | `2` | Starting another evicts the least recently used |
 | `Hls__IdleSeconds` | `120` | No ping or segment request for this long ⇒ ffmpeg is killed |
 | `Hls__SegmentSeconds` | `6` | |

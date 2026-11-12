@@ -4,7 +4,7 @@ using MediaServer.Api.Data;
 namespace MediaServer.Api.Library;
 
 /// <summary>Where you stopped watching. Stored on the server so it follows you between browsers and devices.</summary>
-public sealed class ProgressService(Database db, TimeProvider time, IConfiguration config, MediaServer.Api.Auth.IUserContext? users = null)
+public sealed class ProgressService(Database db, TimeProvider time, IConfiguration config, MediaServer.Api.Auth.IUserContext? users = null, MediaServer.Api.Trakt.TraktService? trakt = null)
 {
     public const double MinResumeSeconds = 30;
     private long UserId => users?.UserId ?? 1;
@@ -23,11 +23,13 @@ public sealed class ProgressService(Database db, TimeProvider time, IConfigurati
         using var c = db.Open();
         if (Database.Scalar(c, $"SELECT 1 FROM media_files WHERE id={mediaId.ToString(CultureInfo.InvariantCulture)}") is null) return false;
         RecordActivity(c, mediaId, position);
+        var wasWatched = isWatched && trakt is not null && Database.Query(c, "SELECT watched FROM media_progress WHERE user_id=@u AND media_id=@m", r => r.GetInt32(0) == 1, ("@u", UserId), ("@m", mediaId)).FirstOrDefault();
         Database.Execute(c, null, """
             INSERT INTO media_progress(user_id, media_id, position_seconds, duration_seconds, watched, updated_at) VALUES(@u,@m,@p,@d,@w,@t)
             ON CONFLICT(user_id, media_id) DO UPDATE SET position_seconds=excluded.position_seconds,
                 duration_seconds=COALESCE(excluded.duration_seconds, duration_seconds), watched=excluded.watched, updated_at=excluded.updated_at
             """, ("@u", UserId), ("@m", mediaId), ("@p", position), ("@d", duration), ("@w", isWatched ? 1 : 0), ("@t", time.GetUtcNow().ToString("O", CultureInfo.InvariantCulture)));
+        if (isWatched && !wasWatched) trakt?.QueueWatched(UserId, [mediaId]);   // only the moment it becomes watched, so a rewatch does not add it again
         return true;
     }
 
@@ -62,6 +64,8 @@ public sealed class ProgressService(Database db, TimeProvider time, IConfigurati
         if (files.Count == 0) return 0;
         var now = time.GetUtcNow().ToString("O", CultureInfo.InvariantCulture);
         using var c = db.Open();
+        var alreadyWatched = watched && trakt is not null
+            ? Database.Query(c, "SELECT media_id FROM media_progress WHERE user_id=@u AND watched=1", r => r.GetInt64(0), ("@u", UserId)).ToHashSet() : [];
         using var tx = c.BeginTransaction();
         foreach (var (id, duration) in files)
         {
@@ -73,6 +77,7 @@ public sealed class ProgressService(Database db, TimeProvider time, IConfigurati
                 """, ("@u", UserId), ("@m", id), ("@d", d), ("@t", now));
         }
         tx.Commit();
+        if (watched) trakt?.QueueWatched(UserId, files.Select(f => f.Id).Where(i => !alreadyWatched.Contains(i)).ToList());
         return files.Count;
     }
 

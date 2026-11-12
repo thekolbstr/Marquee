@@ -1,6 +1,8 @@
 using MediaServer.Api.Library;
 using MediaServer.Api.Metadata;
 
+using MediaServer.Api.Trakt;
+
 namespace MediaServer.Api.Endpoints;
 
 public static class LibraryEndpoints
@@ -21,6 +23,45 @@ public static class LibraryEndpoints
         app.MapPut("/api/watchlist/{type}/{key}", (string type, string key, WatchlistService w, LibraryQueries q) =>
             q.CanonicalItemKey(type, key) is { } k && w.Add(type, k) ? Results.NoContent() : Results.BadRequest(new { error = "Unknown item" }));
         app.MapDelete("/api/watchlist/{type}/{key}", (string type, string key, WatchlistService w, LibraryQueries q) => { w.Remove(type, q.CanonicalItemKey(type, key) ?? key); return Results.NoContent(); });
+
+        // Trakt.tv: connect your own account (per person), push what you finish watching, import what Trakt says you watched.
+        app.MapGet("/api/trakt/status", (TraktService t, MediaServer.Api.Auth.IUserContext me) => Results.Ok(new { configured = t.IsConfigured, connected = t.IsConnected(me.UserId) }));
+        app.MapPost("/api/trakt/connect", async (TraktService t, CancellationToken ct) =>
+        {
+            try { return Results.Ok(await t.StartAsync(ct)); }
+            catch (TraktException ex) { return Results.BadRequest(new { error = ex.Message }); }
+            catch (HttpRequestException) { return Results.BadRequest(new { error = "Could not reach Trakt." }); }
+        });
+        app.MapPost("/api/trakt/poll", async (TraktDeviceBody body, TraktService t, MediaServer.Api.Auth.IUserContext me, CancellationToken ct) =>
+        {
+            try { return Results.Ok(new { status = await t.PollAsync(me.UserId, body.DeviceCode ?? "", ct) }); }
+            catch (TraktException ex) { return Results.BadRequest(new { error = ex.Message }); }
+            catch (HttpRequestException) { return Results.BadRequest(new { error = "Could not reach Trakt." }); }
+        });
+        app.MapPost("/api/trakt/import", async (TraktService t, MediaServer.Api.Auth.IUserContext me, CancellationToken ct) =>
+        {
+            try { return Results.Ok(await t.ImportAsync(me.UserId, ct)); }
+            catch (TraktException ex) { return Results.BadRequest(new { error = ex.Message }); }
+            catch (HttpRequestException) { return Results.BadRequest(new { error = "Could not reach Trakt." }); }
+        });
+        app.MapDelete("/api/trakt", (TraktService t, MediaServer.Api.Auth.IUserContext me) => { t.Disconnect(me.UserId); return Results.NoContent(); });
+
+        // Collections: named groups of titles
+        app.MapGet("/api/collections", (CollectionService cs) => Results.Ok(new { collections = cs.List() }));
+        app.MapPost("/api/collections", (CollectionNameBody body, CollectionService cs) =>
+            cs.Create(body.Name) is { } created ? Results.Ok(created)
+                : Results.BadRequest(new { error = CollectionService.CleanName(body.Name) is null ? $"Give it a name of up to {CollectionService.MaxNameLength} characters." : "You already have a collection with that name, or you have reached the limit." }));
+        app.MapGet("/api/collections/{id:long}", (long id, CollectionService cs, LibraryQueries q) =>
+            cs.Get(id) is { } c ? Results.Ok(new { id = c.Id, name = c.Name, items = q.ItemsByKeys(cs.Keys(id)) }) : Results.NotFound());
+        app.MapPatch("/api/collections/{id:long}", (long id, CollectionNameBody body, CollectionService cs) =>
+            cs.Rename(id, body.Name) ? Results.NoContent() : Results.BadRequest(new { error = "That name is empty, too long, or already used." }));
+        app.MapDelete("/api/collections/{id:long}", (long id, CollectionService cs) => cs.Delete(id) ? Results.NoContent() : Results.NotFound());
+        app.MapGet("/api/collections/containing/{type}/{key}", (string type, string key, CollectionService cs, LibraryQueries q) =>
+            Results.Ok(new { ids = q.CanonicalItemKey(type, key) is { } k ? cs.Containing(type, k) : [] }));
+        app.MapPut("/api/collections/{id:long}/items/{type}/{key}", (long id, string type, string key, CollectionService cs, LibraryQueries q) =>
+            q.CanonicalItemKey(type, key) is { } k && cs.Add(id, type, k) ? Results.NoContent() : Results.BadRequest(new { error = "Unknown collection or title" }));
+        app.MapDelete("/api/collections/{id:long}/items/{type}/{key}", (long id, string type, string key, CollectionService cs, LibraryQueries q) =>
+        { cs.Remove(id, type, q.CanonicalItemKey(type, key) ?? key); return Results.NoContent(); });
 
         // Mark a whole show (or one season of it) watched or unwatched.
         app.MapPost("/api/items/series/{key}/watched", (string key, int? season, bool? watched, LibraryQueries q, ProgressService p) =>
@@ -71,3 +112,6 @@ public static class LibraryEndpoints
         });
     }
 }
+
+public sealed record CollectionNameBody(string? Name);
+public sealed record TraktDeviceBody(string? DeviceCode);

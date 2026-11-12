@@ -51,7 +51,7 @@ class Player {
     this.mode = f.mode; this.reason = f.reason;
     this.castSession = null;
     this.castTime = 0;
-    this.captionTracks = []; this.captionActive = null;
+    this.captionTracks = []; this.captionActive = null; this.captionOffset = 0; this.subsSearch = null;
     this.audioTracks = f.audio || [];
     this.options = APP.allowTranscoding ? qualitiesFor(f.width) : [];
     this.quality = store('quality') || 'original';
@@ -257,7 +257,8 @@ class Player {
   // ------------------------------------------------------------------ keyboard
   onKey(e) {
     if (e.target.closest && e.target.closest('input, textarea, select')) return;
-    if (e.ctrlKey || e.metaKey || e.altKey) return;   // browser shortcuts (copy, find, address bar…) are not player keys
+    if (e.ctrlKey || e.metaKey || e.altKey) return;
+    if (document.querySelector('.dlg-backdrop')) return;   // a dialog is open: its own keys apply   // browser shortcuts (copy, find, address bar…) are not player keys
     const v = this.video;
     switch (e.key) {
       case ' ': case 'k': e.preventDefault(); this.togglePlay(); break;
@@ -302,7 +303,7 @@ class Player {
       kids = [
         this.options.length ? row('Quality', this.qualityLabel(), () => this.openMenu('quality')) : null,
         this.audioTracks.length > 1 ? row('Audio', this.audioLabelNow(), () => this.openMenu('audio')) : null,
-        this.captionTracks.length ? row('Subtitles', this.captionLabelNow(), () => this.openMenu('subs')) : null,
+        this.captionTracks.length || this.subsSearch ? row('Subtitles', this.captionLabelNow(), () => this.openMenu('subs')) : null,
         row('Playback speed', this.speedLabel(), () => this.openMenu('speed')),
         h('div', { class: 'mrow toggle' }, h('span', {}, 'Stats for nerds'), toggle(!this.statsBox.classList.contains('hidden'), (on) => this.setStats(on))),
       ];
@@ -319,6 +320,15 @@ class Player {
           return h('button', { type: 'button', role: 'menuitemradio', 'aria-checked': String(on), class: 'mopt' + (on ? ' on' : ''), disabled: picture && !burnable ? true : null, onclick: () => this.selectCaption(t) },
             h('span', {}, t.label, t.forced ? ' (forced)' : ''), h('small', {}, on ? '✓' : picture ? (burnable ? 'burn in' : 'picture-based') : t.source === 'file' ? 'file' : ''));
         })];
+      const shown = this.captionTracks.find((t) => t.id === this.captionActive);
+      if (shown && this.extra.burnSubtitle == null) {
+        const off = this.captionOffset, label = off === 0 ? 'In sync' : `${off > 0 ? '+' : ''}${off.toFixed(1)} s`;
+        kids.push(h('div', { class: 'mrow toggle' }, h('span', {}, 'Delay'), h('span', { class: 'mval nudge' },
+          h('button', { type: 'button', class: 'cbtn', title: 'Show subtitles earlier', 'aria-label': 'Show subtitles earlier', onclick: () => this.nudgeCaptions(-0.5) }, '−'), label,
+          h('button', { type: 'button', class: 'cbtn', title: 'Show subtitles later', 'aria-label': 'Show subtitles later', onclick: () => this.nudgeCaptions(0.5) }, '+'))));
+        if (shown.source === 'download') kids.push(h('button', { type: 'button', role: 'menuitem', class: 'mrow', onclick: () => this.removeDownloadedCaption(shown) }, h('span', {}, 'Remove this downloaded subtitle')));
+      }
+      if (this.subsSearch) kids.push(h('button', { type: 'button', role: 'menuitem', class: 'mrow', onclick: () => this.openSubtitleSearch() }, h('span', {}, 'Find subtitles…'), h('span', { class: 'mval' }, h('i', { class: 'chev' }, '›'))));
     } else {
       kids = [head('Playback speed'), ...SPEEDS.map((r) => opt(this.speedLabel(r), this.video.playbackRate === r, '', () => { this.setSpeed(r); this.openMenu('speed'); }))];
     }
@@ -349,6 +359,7 @@ class Player {
   }
 
   async loadCaptions() {
+    api('/api/subtitles/status').then((s) => { this.subsSearch = s.configured ? s : null; }).catch(() => {});
     const tracks = (await api(`/api/media/${this.f.mediaId}/captions`)).tracks || [];
     this.captionTracks = tracks;
     const usable = tracks.filter((t) => t.supported !== false);
@@ -361,13 +372,75 @@ class Player {
     const v = this.video;
     v.querySelectorAll('track').forEach((x) => x.remove());
     for (const x of v.textTracks) x.mode = 'disabled';
-    this.captionActive = t ? t.id : null;
+    this.captionActive = t ? t.id : null; this.captionOffset = 0;
     if (!t) return;
     const lang = /^[a-z]{2,3}$/i.test(t.language || '') ? t.language : 'und';
     const el = h('track', { kind: 'subtitles', label: t.label, srclang: lang, src: `/api/media/${this.f.mediaId}/captions/${t.id}.vtt`, default: true });
     el.addEventListener('error', () => { toast('Could not load those captions', true); this.showCaption(null); });
+    el.addEventListener('load', () => this.applyCaptionOffset());
     v.append(el);
     el.track.mode = 'showing';
+  }
+
+  // Shift every cue of the shown track by captionOffset seconds (positive = later). Original times are remembered on the cue itself.
+  applyCaptionOffset() {
+    for (const tr of this.video.textTracks) {
+      if (tr.mode === 'disabled' || !tr.cues) continue;
+      for (const cue of tr.cues) {
+        if (!cue._orig) cue._orig = [cue.startTime, cue.endTime];
+        cue.startTime = Math.max(0, cue._orig[0] + this.captionOffset); cue.endTime = Math.max(0, cue._orig[1] + this.captionOffset);
+      }
+    }
+  }
+  nudgeCaptions(d) {
+    this.captionOffset = Math.round(Math.max(-30, Math.min(30, this.captionOffset + d)) * 10) / 10;
+    this.applyCaptionOffset(); this.openMenu('subs');
+  }
+
+  // The "Find subtitles" dialog: search OpenSubtitles for this title, pick one, and it is kept on the server for next time.
+  openSubtitleSearch() {
+    this.closeMenu();
+    const LANGS = [['en', 'English'], ['es', 'Español'], ['fr', 'Français'], ['de', 'Deutsch'], ['it', 'Italiano'], ['pt-br', 'Português (Brasil)'], ['pt-pt', 'Português'], ['nl', 'Nederlands'], ['sv', 'Svenska'], ['pl', 'Polski'], ['ru', 'Русский'], ['tr', 'Türkçe'], ['ja', '日本語'], ['ko', '한국어'], ['zh-cn', '中文']];
+    const lang = h('select', { class: 'dlg-input', 'aria-label': 'Language' }, LANGS.map(([v, l]) => h('option', { value: v, selected: v === (this.subsSearch && this.subsSearch.language) }, l)));
+    const list = h('div', { class: 'dlg-list' });
+    const status = h('p', { class: 'dur' });
+    const close = () => { dlg.remove(); document.removeEventListener('keydown', onKey); };
+    const onKey = (e) => { if (e.key === 'Escape') close(); };
+    const search = async () => {
+      status.className = 'dur'; status.textContent = 'Searching…'; list.replaceChildren();
+      try {
+        const r = (await api(`/api/media/${this.f.mediaId}/subtitles/search?lang=${encodeURIComponent(lang.value)}`)).results;
+        status.textContent = r.length ? `${r.length} found. Best matches first.` : 'Nothing found for this title in that language.';
+        list.replaceChildren(...r.slice(0, 40).map((x) => h('button', { type: 'button', class: 'mopt', onclick: () => pick(x) },
+          h('span', {}, x.name, x.hearingImpaired ? ' (hearing impaired)' : ''), h('small', {}, `${x.downloads.toLocaleString()} downloads${x.trusted ? ' · trusted' : ''}`))));
+      } catch (e) { status.className = 'dur bad'; status.textContent = e.message; }
+    };
+    const pick = async (x) => {
+      status.className = 'dur'; status.textContent = 'Downloading…'; list.replaceChildren();
+      try {
+        const res = await fetch(`/api/media/${this.f.mediaId}/subtitles/download`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ fileId: x.fileId, language: lang.value }) });
+        const j = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(j.error || 'The download did not work.');
+        this.captionTracks = j.tracks; close();
+        const t = j.tracks.find((c) => c.id === j.track); if (t) { this.selectCaption(t); toast(`Subtitles added: ${t.label}`); }
+      } catch (e) { status.className = 'dur bad'; status.textContent = e.message; search(); }
+    };
+    const dlg = h('div', { class: 'dlg-backdrop', onclick: (e) => { if (e.target === dlg) close(); } },
+      h('div', { class: 'dlg', role: 'dialog', 'aria-modal': 'true', 'aria-label': 'Find subtitles' },
+        h('h2', {}, 'Find subtitles'), h('p', { class: 'dur' }, `For “${this.f.title}”, from OpenSubtitles.`),
+        h('div', { class: 'inline' }, lang, h('button', { class: 'btn small', type: 'button', onclick: search }, 'Search')),
+        status, list, h('div', { class: 'dlg-actions' }, h('button', { class: 'btn glass small', type: 'button', onclick: close }, 'Close'))));
+    this.stage.append(dlg);
+    document.addEventListener('keydown', onKey);
+    search();
+  }
+
+  async removeDownloadedCaption(t) {
+    try {
+      const res = await fetch(`/api/media/${this.f.mediaId}/subtitles/${t.id}`, { method: 'DELETE' });
+      if (!res.ok) throw new Error();
+      this.showCaption(null); this.captionTracks = (await res.json()).tracks; toast('Removed'); this.openMenu('subs');
+    } catch { toast('Could not remove that subtitle', true); }
   }
 
   async selectCaption(t) {

@@ -11,7 +11,7 @@ const shared = Object.fromEntries(['h', 'icon', 'api', 'toast', 'store', 'sleep'
   'fmtRuntime', 'fmtLeft', 'fmtBytes', 'fmtUp', 'hashHue', 'capsQuery', 'CAPS', 'IS_SAFARI', 'watchScan', 'scanBtn', 'mountSystem', 'playerToken', 'activePlayback', 'teardownPlayer', 'showError',
   'AUTH', 'APP', 'isAdmin', 'authLost', 'signOut', 'showLogin', 'showSetup', 'showWelcome', 'applyServerName', 'refreshApp', 'paintUserChip', 'postJson', 'passwordField', 'greetingName',
   'pref', 'setPref', 'applyPrefs', 'skipSeconds', 'showSettings', 'toggle', 'field', 'folderManager', 'openFolderPicker',
-  'inMyList', 'myListButton', 'showMyList', 'watchedMenu', 'showRecordings', 'startRecording', 'showPlayer', 'Player', 'loadLiveStatus', 'liveTile', 'showLive', 'showLivePlayer', 'reportClientError',
+  'inMyList', 'myListButton', 'showMyList', 'collectionsButton', 'showCollections', 'showCollection', 'watchedMenu', 'showRecordings', 'startRecording', 'showPlayer', 'Player', 'loadLiveStatus', 'liveTile', 'showLive', 'showLivePlayer', 'reportClientError',
   'activityPanel', 'showDownloads', 'downloadsTools', 'skipTask', 'arrInfo', 'arrDialog', 'clickable', 'arrPoster', 'arrWhen', 'arrDate', 'loadArrStatus', 'formatWatchTime', 'formatDay',
   'langKey', 'formatClock', 'formatRuntime', 'formatLeft', 'formatBytes', 'formatBitrate', 'bufferAhead', 'trickplayCell', 'qualitiesFor', 'pickCaption', 'audioLabel', 'codecName', 'statsRows', 'QUALITIES',
   'LANG_NAMES', 'LANG_ALIASES', 'newController', 'reportIssue', 'watchDecoding', 'itemHref', 'GUIDE_HOURS', 'GUIDE_PX', 'CHAN_W', 'liveInfo', 'itemSub', 'continueTile', 'loadLiveChannelsForHome', 'heroCarousel'].map((n) => [n, 'readonly']));

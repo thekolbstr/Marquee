@@ -9,14 +9,20 @@ public static class MaintenanceEndpoints
 {
     public static void MapMaintenanceEndpoints(this WebApplication app)
     {
-        app.MapPost("/api/maintenance/{task}", (string task, bool? confirm, MaintenanceService m, ScanCoordinator scans, TmdbClient tmdb, SkipDetector skips, SkipScanService skipScan) =>
+        app.MapPost("/api/maintenance/{task}", async (string task, bool? confirm, MaintenanceService m, ScanCoordinator scans, TmdbClient tmdb, SkipDetector skips, SkipScanService skipScan, CancellationToken ct, MediaServer.Api.Notifications.NotificationService notify) =>
         {
             switch (task)
             {
+                case "test-notification":
+                    var (sent, why) = await notify.SendAsync(MediaServer.Api.Notifications.NotifyEvent.Test, "Marquee", "This is a test message. If you can read it, notifications work.", ct);
+                    return sent ? Results.Ok(new { message = "Sent. Check your device." }) : Results.BadRequest(new { error = why });
+                case "test-encoder":
+                    var (works, text) = await m.TestEncoderAsync(ct);
+                    return works ? Results.Ok(new { message = text }) : Results.BadRequest(new { error = text });
                 case "refresh-metadata":
                     if (!tmdb.IsConfigured) return Results.BadRequest(new { error = "Add TMDB credentials first (Posters & details)." });
                     var n = m.ResetMetadata();
-                    scans.TryStart();
+                    _ = scans.TryStart();   // runs in the background
                     return Results.Ok(new { message = $"Refreshing details for {n} files. This runs in the background and can take a few minutes." });
                 case "scan-skips":
                     if (skips.IsRunning) return Results.Ok(new { message = "Already looking. Progress shows below." });
@@ -53,6 +59,13 @@ public static class MaintenanceEndpoints
 
         app.MapGet("/api/system/logs", (MemoryLogStore logs, string? level, string? q, int? limit) =>
             Results.Ok(new { entries = logs.Query(level, q, limit ?? 200) }));
+
+        // Is a newer release out? (Administrators only, like everything under /api/system.) POST forces a fresh look.
+        app.MapGet("/api/system/update", async (UpdateService u, CancellationToken ct) => Results.Ok(await u.CheckAsync(false, ct)));
+        app.MapPost("/api/system/update/check", async (UpdateService u, CancellationToken ct) => Results.Ok(await u.CheckAsync(true, ct)));
+
+        // A read-only report: duplicates, unreadable files, unmatched titles, files that need converting. (Administrators only.)
+        app.MapGet("/api/system/library-health", (LibraryHealthService h) => Results.Ok(h.Report()));
 
         app.MapGet("/api/system/about", async (MaintenanceService m, CancellationToken ct) => Results.Ok(await m.AboutAsync(ct)));
     }

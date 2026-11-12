@@ -99,6 +99,30 @@ public class HlsQualityAndPlaylistTests
     public void TheCrfIsKeptInASaneRange(string crf, int expected)
         => Assert.Equal(expected, HlsOptions.From(new Microsoft.Extensions.Configuration.ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?> { ["Hls:Crf"] = crf }).Build()).Crf);
 
+    [Theory]
+    [InlineData("videotoolbox", "h264_videotoolbox")] [InlineData("qsv", "h264_qsv")] [InlineData("vaapi", "h264_vaapi")] [InlineData("nvenc", "h264_nvenc")]
+    public void HardwareEncoders_UseTheirOwnCodec_AndNeverX264(string encoder, string codec)
+    {
+        var o = new HlsOptions { Encoder = encoder };
+        var plan = HlsPlanner.Decide(Src(1920), o, ClientCaps.Baseline, ".mkv", quality: "480p")!;
+        var args = HlsCommandBuilder.Build("/a.mkv", "/tmp/s", plan, o);
+        Assert.Contains(codec, args); Assert.DoesNotContain("libx264", args);
+        Assert.Equal(encoder == "vaapi", args.Contains("-vaapi_device"));
+        Assert.Equal(encoder == "vaapi", args[args.IndexOf("-vf") + 1].EndsWith("format=nv12,hwupload"));
+        if (encoder == "vaapi") Assert.True(args.IndexOf("-vaapi_device") < args.IndexOf("-i"));
+    }
+
+    [Theory] [InlineData("videotoolbox", "videotoolbox")] [InlineData("QSV", "qsv")] [InlineData("nonsense", "libx264")] [InlineData(null, "libx264")]
+    public void Encoder_FallsBackToSoftware_WhenUnknown(string? value, string expected)
+        => Assert.Equal(expected, HlsOptions.From(new Microsoft.Extensions.Configuration.ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?> { ["Hls:Encoder"] = value }).Build()).Encoder);
+
+    [Fact] public void EncoderTest_UsesTheChosenEncoder()
+    {
+        Assert.Contains("h264_vaapi", HlsCommandBuilder.BuildEncoderTest(new HlsOptions { Encoder = "vaapi", VaapiDevice = "/dev/dri/renderD129" }));
+        Assert.Contains("/dev/dri/renderD129", HlsCommandBuilder.BuildEncoderTest(new HlsOptions { Encoder = "vaapi", VaapiDevice = "/dev/dri/renderD129" }));
+        Assert.Contains("libx264", HlsCommandBuilder.BuildEncoderTest(new HlsOptions()));
+    }
+
     [Fact]
     public void SegmentedBuilder_FromTheStart_HasNoSeek_AndNvencUsesConstrainedVbr()
     {

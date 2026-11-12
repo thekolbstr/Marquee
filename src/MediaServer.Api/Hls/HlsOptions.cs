@@ -10,8 +10,11 @@ public sealed class HlsOptions
     public int IdleSeconds { get; init; } = 120;
     public int StartTimeoutSeconds { get; init; } = 30;
     public int SegmentSeconds { get; init; } = 6;
-    /// <summary>"libx264" (CPU) or "nvenc" (NVIDIA GPU).</summary>
+    /// <summary>"libx264" (CPU), or a hardware encoder: "nvenc" (NVIDIA), "videotoolbox" (Apple), "qsv" (Intel) or "vaapi" (Linux: Intel/AMD).</summary>
     public string Encoder { get; init; } = "libx264";
+    public static readonly string[] Encoders = ["libx264", "nvenc", "videotoolbox", "qsv", "vaapi"];
+    /// <summary>The render node VAAPI uses (config only: Hls__VaapiDevice).</summary>
+    public string VaapiDevice { get; init; } = "/dev/dri/renderD128";
     public int MaxHeight { get; init; } = 1080;
     /// <summary>x264 speed preset: slower is smaller and nicer at the same quality but uses far more CPU.</summary>
     public string Preset { get; init; } = "veryfast";
@@ -37,7 +40,8 @@ public sealed class HlsOptions
             IdleSeconds = Math.Max(1, c.GetValue("Hls:IdleSeconds", d.IdleSeconds)),
             StartTimeoutSeconds = Math.Max(1, c.GetValue("Hls:StartTimeoutSeconds", d.StartTimeoutSeconds)),
             SegmentSeconds = Math.Clamp(c.GetValue("Hls:SegmentSeconds", d.SegmentSeconds), 2, 20),
-            Encoder = (c["Hls:Encoder"] ?? d.Encoder).ToLowerInvariant() is "nvenc" ? "nvenc" : "libx264",
+            Encoder = Encoders.Contains((c["Hls:Encoder"] ?? "").ToLowerInvariant()) ? c["Hls:Encoder"]!.ToLowerInvariant() : d.Encoder,
+            VaapiDevice = c["Hls:VaapiDevice"] is { Length: > 0 } dev ? dev : d.VaapiDevice,
             AllowTranscoding = c.GetValue("Hls:AllowTranscoding", d.AllowTranscoding),
             MaxHeight = Math.Max(240, c.GetValue("Hls:MaxHeight", d.MaxHeight)),
             Preset = Presets.Contains((c["Hls:Preset"] ?? "").ToLowerInvariant()) ? c["Hls:Preset"]!.ToLowerInvariant() : d.Preset,

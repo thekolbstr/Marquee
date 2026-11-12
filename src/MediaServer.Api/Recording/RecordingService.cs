@@ -21,7 +21,7 @@ public sealed class RecordingException(string message, int status = 400) : Excep
 /// recordings folder, which is part of the library, so they play, resume and get preview thumbnails like anything else.
 /// </summary>
 public sealed partial class RecordingService(Database db, LiveTvService live, IConfiguration config, TimeProvider time, ILogger<RecordingService> log,
-    IUserContext? users = null, ScanCoordinator? scans = null)
+    IUserContext? users = null, ScanCoordinator? scans = null, MediaServer.Api.Notifications.NotificationService? notify = null)
 {
     private sealed class Running(Process process, string partFile, string finalFile, string streamUrl)
     {
@@ -281,6 +281,21 @@ public sealed partial class RecordingService(Database db, LiveTvService live, IC
     {
         using var c = db.Open();
         Database.Execute(c, null, "UPDATE recordings SET status=@s, error=@e, finished_at=@t WHERE id=@i", ("@s", status), ("@e", error), ("@t", time.GetUtcNow().ToString("O", CultureInfo.InvariantCulture)), ("@i", id));
+        if (status is "done" or "failed" && notify is not null) _ = TellAsync(id, status, error);
+    }
+
+    // A message that a recording finished (or failed). Fire and forget: nothing here may disturb the recorder.
+    private async Task TellAsync(long id, string status, string? error)
+    {
+        try
+        {
+            if (!notify!.Wants(MediaServer.Api.Notifications.NotifyEvent.Recording)) return;
+            string title;
+            using (var c = db.Open()) title = Database.Query(c, "SELECT title FROM recordings WHERE id=@i", r => r.GetString(0), ("@i", id)).FirstOrDefault() ?? "A recording";
+            await notify.NotifyAsync(MediaServer.Api.Notifications.NotifyEvent.Recording, status == "done" ? "Recording finished" : "Recording failed",
+                status == "done" ? $"“{title}” is ready to watch." + (error is null ? "" : " " + error) : $"“{title}” could not be recorded." + (error is null ? "" : " " + error));
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException) { log.LogInformation("Recording notification failed: {Reason}", ex.GetType().Name); }
     }
 
     /// <summary>A stream URL (which may carry a password) must never reach a log or the page.</summary>

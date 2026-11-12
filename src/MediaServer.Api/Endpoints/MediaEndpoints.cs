@@ -41,6 +41,29 @@ public static class MediaEndpoints
             return Results.File(file, "text/vtt; charset=utf-8");
         });
 
+        // Find and download subtitles (OpenSubtitles). Downloads are kept in Marquee's data folder, never next to your files.
+        app.MapGet("/api/subtitles/status", (SubtitleDownloads d, IConfiguration config) => Results.Ok(new { configured = d.IsConfigured, language = config["Subtitles:Language"] is { Length: > 0 } l ? l : "en" }));
+        app.MapGet("/api/media/{id:long}/subtitles/search", async (long id, string? lang, SubtitleDownloads d, IConfiguration config, CancellationToken ct) =>
+        {
+            try { return Results.Ok(new { results = await d.SearchAsync(id, lang is { Length: > 0 } ? lang : config["Subtitles:Language"] ?? "en", ct) }); }
+            catch (SubtitleProviderException ex) { return Results.BadRequest(new { error = ex.Message }); }
+            catch (HttpRequestException) { return Results.BadRequest(new { error = "Could not reach OpenSubtitles." }); }
+            catch (TaskCanceledException) when (!ct.IsCancellationRequested) { return Results.BadRequest(new { error = "OpenSubtitles took too long to answer." }); }
+        });
+        app.MapPost("/api/media/{id:long}/subtitles/download", async (long id, SubtitleDownloadBody body, SubtitleDownloads d, SubtitleService subs, CancellationToken ct) =>
+        {
+            try
+            {
+                var track = await d.DownloadAsync(id, body.FileId ?? "", body.Language ?? "en", ct);
+                return Results.Ok(new { track, tracks = subs.List(id) });
+            }
+            catch (SubtitleProviderException ex) { return Results.BadRequest(new { error = ex.Message }); }
+            catch (HttpRequestException) { return Results.BadRequest(new { error = "Could not reach OpenSubtitles." }); }
+            catch (TaskCanceledException) when (!ct.IsCancellationRequested) { return Results.BadRequest(new { error = "OpenSubtitles took too long to answer." }); }
+        });
+        app.MapDelete("/api/media/{id:long}/subtitles/{track}", (long id, string track, SubtitleService subs) =>
+            subs.RemoveDownloaded(id, track) ? Results.Ok(new { tracks = subs.List(id) }) : Results.NotFound());
+
         // Chapter marks and the skip-intro / skip-credits spans found in them.
         app.MapGet("/api/media/{id:long}/chapters", async (long id, ChapterService chapters, CancellationToken ct) =>
             await chapters.GetAsync(id, ct) is { } info ? Results.Ok(info) : Results.NotFound());
@@ -77,3 +100,5 @@ public static class MediaEndpoints
         }));
     }
 }
+
+public sealed record SubtitleDownloadBody(string? FileId, string? Language);

@@ -23,6 +23,9 @@ public sealed class SubtitleService(Database db, IMediaResolver media, IProcessR
 
     private readonly string _dir = Path.Combine(Path.GetFullPath(config["Images:CacheDir"] ?? "data/images"), "subs");
     private readonly string _ffmpeg = config["Tools:FfmpegPath"] ?? "ffmpeg";
+    /// <summary>Subtitles downloaded through Marquee. They live with Marquee's own data (not the cache, which "clear caches" empties) and never next to your media.</summary>
+    private readonly string _downloads = Path.Combine(Path.GetDirectoryName(Path.GetFullPath(config["Database:Path"] ?? "data/mediaserver.db"))!, "subtitles");
+    private const int MaxDownloadedPerTitle = 10;
     private readonly SemaphoreSlim _gate = new(2, 2);
     private readonly ConcurrentDictionary<string, Lazy<Task<string?>>> _inflight = new();
 
@@ -41,6 +44,12 @@ public sealed class SubtitleService(Database db, IMediaResolver media, IProcessR
         {
             var lang = SidecarLanguage(path, f);
             tracks.Add(new CaptionTrack($"f{n++}", Label(null, lang, null, tracks.Count), Lang(lang), false, false, true, "file"));
+        }
+        var d = 0;
+        foreach (var f in Downloaded(mediaId))
+        {
+            var lang = DownloadedLanguage(f);
+            tracks.Add(new CaptionTrack($"d{d++}", Label(null, lang, null, tracks.Count) + " (downloaded)", Lang(lang), false, false, true, "download"));
         }
         return tracks;
     }
@@ -63,6 +72,12 @@ public sealed class SubtitleService(Database db, IMediaResolver media, IProcessR
             var files = Sidecars(path);
             if (n >= files.Count) return null;
             input = files[n]; map = [];
+        }
+        else if (trackId[0] == 'd' && int.TryParse(trackId.AsSpan(1), NumberStyles.None, CultureInfo.InvariantCulture, out var dn))
+        {
+            var files = Downloaded(mediaId);
+            if (dn >= files.Count) return null;
+            input = files[dn]; map = [];
         }
         else return null;
 
@@ -96,6 +111,57 @@ public sealed class SubtitleService(Database db, IMediaResolver media, IProcessR
             return target;
         }
         finally { _gate.Release(); }
+    }
+
+    // ---- subtitles downloaded through Marquee: <data>/subtitles/<media id>/<language>-<file id>.srt
+
+    private string DownloadDir(long mediaId) => Path.Combine(_downloads, mediaId.ToString(CultureInfo.InvariantCulture));
+
+    private List<string> Downloaded(long mediaId)
+    {
+        try { return Directory.Exists(DownloadDir(mediaId)) ? Directory.EnumerateFiles(DownloadDir(mediaId), "*.srt").OrderBy(f => f, StringComparer.Ordinal).Take(MaxDownloadedPerTitle).ToList() : []; }
+        catch (IOException) { return []; }
+        catch (UnauthorizedAccessException) { return []; }
+    }
+
+    private static string? DownloadedLanguage(string file) { var n = Path.GetFileNameWithoutExtension(file); var i = n.IndexOf('-'); return i > 0 ? n[..i] : null; }
+
+    private static readonly System.Text.RegularExpressions.Regex SafeLang = new("^[a-z]{2,3}(-[A-Za-z]{2,4})?$", System.Text.RegularExpressions.RegexOptions.Compiled);
+
+    /// <summary>Stores a downloaded subtitle for a title. Returns the new track's id, or null if it is not a real subtitle file, the title is unknown, or the title already has the maximum.</summary>
+    public string? SaveDownloaded(long mediaId, string language, string fileId, byte[] bytes)
+    {
+        if (media.ResolvePath(mediaId) is null || !SafeLang.IsMatch(language) || !fileId.All(char.IsAsciiDigit) || fileId.Length is 0 or > 18) return null;
+        var text = OpenSubtitlesClient.ToText(bytes);
+        if (!OpenSubtitlesClient.LooksLikeSubtitles(text)) return null;
+        var dir = DownloadDir(mediaId);
+        Directory.CreateDirectory(dir);
+        var file = Path.Combine(dir, $"{language.ToLowerInvariant()}-{fileId}.srt");
+        if (!File.Exists(file) && Downloaded(mediaId).Count >= MaxDownloadedPerTitle) return null;
+        File.WriteAllText(file, text, new System.Text.UTF8Encoding(false));
+        var at = Downloaded(mediaId).IndexOf(file);
+        return at < 0 ? null : $"d{at}";
+    }
+
+    /// <summary>Deletes one downloaded subtitle ("d0", "d1"…). Files next to the video or inside it are never touched.</summary>
+    public bool RemoveDownloaded(long mediaId, string trackId)
+    {
+        if (trackId.Length < 2 || trackId[0] != 'd' || !int.TryParse(trackId.AsSpan(1), NumberStyles.None, CultureInfo.InvariantCulture, out var n)) return false;
+        var files = Downloaded(mediaId);
+        if (n >= files.Count) return false;
+        try { File.Delete(files[n]); return true; } catch (IOException) { return false; }
+    }
+
+    /// <summary>What to search for: the show or film title with its year, season and episode, from how the file was parsed.</summary>
+    public SubtitleQuery? QueryFor(long mediaId)
+    {
+        using var c = db.Open();
+        var rows = Database.Query(c, "SELECT kind, title, year, season, episode FROM media_files WHERE id=@id AND deleted_at IS NULL",
+            r => (Kind: r.IsDBNull(0) ? null : r.GetString(0), Title: r.IsDBNull(1) ? null : r.GetString(1), Year: r.IsDBNull(2) ? (int?)null : r.GetInt32(2), Season: r.IsDBNull(3) ? (int?)null : r.GetInt32(3), Episode: r.IsDBNull(4) ? (int?)null : r.GetInt32(4)),
+            ("@id", mediaId));
+        if (rows.Count == 0 || string.IsNullOrWhiteSpace(rows[0].Title)) return null;
+        var x = rows[0];
+        return x.Kind == "Episode" ? new SubtitleQuery(x.Title!, x.Year, x.Season, x.Episode) : new SubtitleQuery(x.Title!, x.Year, null, null);
     }
 
     private static void TryDelete(string p) { try { File.Delete(p); } catch (IOException) { } }

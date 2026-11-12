@@ -354,5 +354,32 @@ public static class Migrations
             scanned_at  TEXT    NOT NULL
         );
         """,
+        // v16: collections: your own named groups of movies and shows.
+        """
+        CREATE TABLE collections (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id    INTEGER NOT NULL,
+            name       TEXT    NOT NULL,
+            created_at TEXT    NOT NULL
+        );
+        CREATE INDEX ix_collections_user ON collections(user_id);
+        CREATE TABLE collection_items (
+            collection_id INTEGER NOT NULL REFERENCES collections(id) ON DELETE CASCADE,
+            kind          TEXT    NOT NULL,          -- 'movie' or 'series'
+            item_key      TEXT    NOT NULL,
+            added_at      TEXT    NOT NULL,
+            PRIMARY KEY (collection_id, kind, item_key)
+        );
+        """,
+        // v17: Trakt.tv connections, one per person. Tokens are stored encrypted.
+        """
+        CREATE TABLE trakt_accounts (
+            user_id       INTEGER PRIMARY KEY,
+            access_token  TEXT NOT NULL,
+            refresh_token TEXT NOT NULL,
+            expires_at    TEXT NOT NULL,
+            connected_at  TEXT NOT NULL
+        );
+        """,
     ];
 }

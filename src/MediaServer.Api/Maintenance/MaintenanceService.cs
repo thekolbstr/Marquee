@@ -153,6 +153,23 @@ public sealed class MaintenanceService(Database db, IConfiguration config, HlsSe
         return path;
     }
 
+    /// <summary>Tries a one-second encode with the encoder chosen in Settings and says whether it worked.</summary>
+    public async Task<(bool Ok, string Message)> TestEncoderAsync(CancellationToken ct)
+    {
+        var o = HlsOptions.From(config);
+        var name = o.Encoder switch { "nvenc" => "NVIDIA (NVENC)", "videotoolbox" => "Apple (VideoToolbox)", "qsv" => "Intel (Quick Sync)", "vaapi" => "VAAPI", _ => "Software (CPU)" };
+        try
+        {
+            using var limit = CancellationTokenSource.CreateLinkedTokenSource(ct); limit.CancelAfter(TimeSpan.FromSeconds(20));
+            var r = await runner.RunAsync(o.FfmpegPath, HlsCommandBuilder.BuildEncoderTest(o), limit.Token);
+            if (r.ExitCode == 0) return (true, $"{name} works: a test video was encoded.");
+            var why = r.StdErr.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).LastOrDefault() ?? "ffmpeg failed";
+            return (false, $"{name} did not work: {(why.Length > 200 ? why[..200] : why)}");
+        }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested) { return (false, $"{name} took too long to answer."); }
+        catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or InvalidOperationException or IOException) { return (false, "ffmpeg could not be started. Is it installed?"); }
+    }
+
     public async Task<AboutInfo> AboutAsync(CancellationToken ct)
     {
         var version = AppVersion.Current;

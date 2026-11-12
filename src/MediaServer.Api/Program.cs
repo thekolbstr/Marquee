@@ -30,6 +30,10 @@ builder.Services.AddSingleton<LibraryScanner>();
 builder.Services.AddSingleton<LibraryQueries>();
 builder.Services.AddSingleton<ThumbnailService>();
 builder.Services.AddSingleton<SubtitleService>();
+builder.Services.AddHttpClient<ISubtitleProvider, OpenSubtitlesClient>(c => c.Timeout = TimeSpan.FromSeconds(30)).RemoveAllLoggers();   // the API key and password travel in these requests
+builder.Services.AddSingleton<SubtitleDownloads>();
+builder.Services.AddHttpClient<MediaServer.Api.Notifications.NotificationService>(c => c.Timeout = TimeSpan.FromSeconds(15)).RemoveAllLoggers();   // the address and token are secrets
+builder.Services.AddHostedService<MediaServer.Api.Notifications.UpdateNotifier>();
 builder.Services.AddSingleton<SkipDetector>();
 builder.Services.AddSingleton<SkipScanService>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<SkipScanService>());
@@ -48,6 +52,8 @@ builder.Services.AddHostedService<LiveTvRefreshService>();
 builder.Services.AddSingleton<ProgressService>();
 builder.Services.AddSingleton<ActivityService>();
 builder.Services.AddSingleton<WatchlistService>();
+builder.Services.AddSingleton<CollectionService>();
+builder.Services.AddSingleton<LibraryHealthService>();
 builder.Services.AddSingleton<SecretBox>();
 builder.Services.AddHttpContextAccessor();
 builder.Services.AddSingleton<IUserContext, HttpUserContext>();
@@ -59,6 +65,8 @@ builder.Services.AddSingleton<SettingsService>();
 builder.Services.AddSingleton<ScanCoordinator>();
 builder.Services.AddHostedService<AutoScanService>();
 builder.Services.AddSingleton(TimeProvider.System);
+builder.Services.AddHttpClient<MediaServer.Api.Maintenance.UpdateService>(c => c.Timeout = TimeSpan.FromSeconds(15));
+builder.Services.AddHttpClient<MediaServer.Api.Trakt.TraktService>(c => c.Timeout = TimeSpan.FromSeconds(20)).RemoveAllLoggers();   // tokens travel in these requests
 builder.Services.AddHttpClient<TmdbClient>(c => c.Timeout = TimeSpan.FromSeconds(30)).RemoveAllLoggers(); // URLs may carry api_key
 builder.Services.AddHttpClient<ArrService>(c => c.Timeout = TimeSpan.FromSeconds(20)).RemoveAllLoggers();
 builder.Services.AddSingleton<ArrWebhook>();

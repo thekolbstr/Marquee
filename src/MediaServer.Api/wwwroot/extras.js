@@ -35,6 +35,84 @@ async function showMyList() {
       : h('div', { class: 'empty' }, h('h2', {}, 'Nothing here yet'), h('p', {}, 'Open a movie or show and choose “My List” to save it for later.'))));
 }
 
+// ================================================================ Collections
+// Named groups of movies and shows ("Christmas films"). Each person has their own.
+const collectionsApi = async (method, path, body) => {
+  const res = await fetch(`/api/collections${path}`, { method, headers: body ? { 'content-type': 'application/json' } : undefined, body: body ? JSON.stringify(body) : undefined });
+  const j = res.status === 204 ? {} : await res.json().catch(() => ({}));
+  if (res.status === 401) { authLost(); throw new Error('Signed out'); }
+  if (!res.ok) throw new Error(j.error || 'That did not work.');
+  return j;
+};
+
+// A button for the details pages that opens a checklist of your collections. `type` is "movie" or "series", like myListButton.
+function collectionsButton(type, key) {
+  const menu = h('div', { class: 'qmenu inlinemenu hidden', role: 'menu' });
+  const btn = h('button', { class: 'btn glass', type: 'button', 'aria-haspopup': 'true', onclick: () => toggle() }, icon('list'), 'Collections');
+  const k = encodeURIComponent(key);
+  const away = (e) => {
+    if (!btn.isConnected) { document.removeEventListener('click', away); return; }   // the page was left: drop this listener
+    const path = e.composedPath();   // not menu.contains(target): a click that re-renders the menu detaches its own target
+    if (!path.includes(menu) && !path.includes(btn)) menu.classList.add('hidden');
+  };
+  document.addEventListener('click', away);
+  async function draw() {
+    let all, mine;
+    try { [all, mine] = await Promise.all([api('/api/collections'), api(`/api/collections/containing/${type}/${k}`)]); }
+    catch { menu.replaceChildren(h('p', { class: 'hint' }, 'Could not load your collections.')); return; }
+    const has = new Set(mine.ids);
+    menu.replaceChildren(
+      ...all.collections.map((c) => h('button', { type: 'button', role: 'menuitemcheckbox', 'aria-checked': String(has.has(c.id)), class: has.has(c.id) ? 'on' : '', onclick: async () => {
+        try { await collectionsApi(has.has(c.id) ? 'DELETE' : 'PUT', `/${c.id}/items/${type}/${k}`); toast(has.has(c.id) ? `Removed from ${c.name}` : `Added to ${c.name}`); } catch (e) { toast(e.message, true); }
+        draw();
+      } }, h('span', {}, c.name), h('small', {}, has.has(c.id) ? '✓' : ''))),
+      h('button', { type: 'button', role: 'menuitem', onclick: async () => {
+        const name = prompt('Name the new collection');
+        if (!name || !name.trim()) return;
+        try { const c = await collectionsApi('POST', '', { name }); await collectionsApi('PUT', `/${c.id}/items/${type}/${k}`); toast(`Added to ${c.name}`); } catch (e) { toast(e.message, true); }
+        draw();
+      } }, h('span', {}, 'New collection…')));
+  }
+  function toggle() { if (menu.classList.toggle('hidden')) return; draw(); }
+  return h('div', { class: 'colmenu' }, btn, menu);
+}
+
+async function showCollections() {
+  const d = await api('/api/collections');
+  document.title = `Collections · ${APP.name}`;
+  const make = async () => {
+    const name = prompt('Name the new collection');
+    if (!name || !name.trim()) return;
+    try { const c = await collectionsApi('POST', '', { name }); location.hash = `#/collection/${c.id}`; } catch (e) { toast(e.message, true); }
+  };
+  setView(h('div', { class: 'page' },
+    h('div', { class: 'page-head' }, h('h1', {}, 'Collections'), h('span', { class: 'count' }, d.collections.length ? `${d.collections.length}` : ''), h('span', { class: 'grow' }),
+      h('button', { class: 'btn small', type: 'button', onclick: make }, icon('plus'), 'New collection')),
+    d.collections.length
+      ? h('div', { class: 'collections' }, d.collections.map((c) => h('a', { class: 'collection-card', href: `#/collection/${c.id}` }, h('strong', {}, c.name), h('span', {}, `${c.count} ${c.count === 1 ? 'title' : 'titles'}`))))
+      : h('div', { class: 'empty' }, h('h2', {}, 'No collections yet'), h('p', {}, 'Group titles your own way: open a movie or show and choose “Collections”, or start one here.'),
+        h('button', { class: 'btn', type: 'button', onclick: make }, 'New collection'))));
+}
+
+async function showCollection(id) {
+  const d = await api(`/api/collections/${encodeURIComponent(id)}`);
+  document.title = `${d.name} · ${APP.name}`;
+  const poster = posterShare(d.items) >= POSTER_MIN;
+  setView(h('div', { class: 'page' },
+    h('div', { class: 'page-head' }, h('a', { class: 'btn glass small', href: '#/collections' }, 'Collections'), h('h1', {}, d.name), h('span', { class: 'count' }, d.items.length ? `${d.items.length} ${d.items.length === 1 ? 'title' : 'titles'}` : ''), h('span', { class: 'grow' }),
+      h('button', { class: 'btn glass small', type: 'button', onclick: async () => {
+        const name = prompt('Rename this collection', d.name);
+        if (!name || !name.trim() || name.trim() === d.name) return;
+        try { await collectionsApi('PATCH', `/${d.id}`, { name }); route(); } catch (e) { toast(e.message, true); }
+      } }, 'Rename'),
+      h('button', { class: 'btn glass small red', type: 'button', onclick: async () => {
+        if (!confirm(`Delete the collection “${d.name}”? The titles in it stay in your library.`)) return;
+        try { await collectionsApi('DELETE', `/${d.id}`); location.hash = '#/collections'; } catch (e) { toast(e.message, true); }
+      } }, 'Delete')),
+    d.items.length ? h('div', { class: 'grid' + (poster ? ' posters' : '') }, d.items.map((i) => itemTile(i, poster)))
+      : h('div', { class: 'empty' }, h('h2', {}, 'Nothing in here yet'), h('p', {}, 'Open a movie or show and choose “Collections” to add it.'))));
+}
+
 // Mark a whole season (or the whole show) watched or unwatched.
 function watchedMenu(seriesKey, getSeason, onDone) {
   const run = async (season, watched) => {

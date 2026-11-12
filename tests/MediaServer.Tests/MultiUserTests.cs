@@ -151,7 +151,7 @@ public sealed class UserManagementTests : IDisposable
         Assert.Equal("admin_required", (await res.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("error").GetString());
     }
 
-    [Theory] [InlineData("/api/items")] [InlineData("/api/continue")] [InlineData("/api/genres")] [InlineData("/api/watchlist")] [InlineData("/api/live/status")] [InlineData("/api/app")] [InlineData("/api/auth/sessions")]
+    [Theory] [InlineData("/api/items")] [InlineData("/api/continue")] [InlineData("/api/genres")] [InlineData("/api/watchlist")] [InlineData("/api/collections")] [InlineData("/api/live/status")] [InlineData("/api/app")] [InlineData("/api/auth/sessions")]
     public async Task OrdinaryPeople_CanStillUseTheServer(string url)
     {
         var (_, sam, _) = await TwoPeople();
@@ -179,6 +179,63 @@ public sealed class UserManagementTests : IDisposable
         Assert.Equal(HttpStatusCode.BadRequest, (await admin.PutAsync("/api/watchlist/album/1", null)).StatusCode);
         Assert.Equal(HttpStatusCode.NoContent, (await admin.DeleteAsync("/api/watchlist/movie/1")).StatusCode);
         Assert.Equal(0, (await admin.GetFromJsonAsync<JsonElement>("/api/watchlist/keys")).GetProperty("keys").GetArrayLength());
+    }
+
+    [Fact] public async Task Collections_WorkThroughTheApi_PerPerson()
+    {
+        var (admin, sam, _) = await TwoPeople();
+        using (var db = _f.Db.Open()) Database.Execute(db, null, "INSERT INTO media_files(path,size,mtime_ticks,first_seen,last_scanned,parser_version,kind,title) VALUES('m.mp4',1,1,'x','x',1,'Movie','Mine')");
+        var made = await admin.PostAsJsonAsync("/api/collections", new { name = "  Christmas   films " });
+        Assert.Equal(HttpStatusCode.OK, made.StatusCode);
+        var id = (await made.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("id").GetInt64();
+        Assert.Equal("Christmas films", (await admin.GetFromJsonAsync<JsonElement>("/api/collections")).GetProperty("collections")[0].GetProperty("name").GetString());
+        Assert.Equal(HttpStatusCode.BadRequest, (await admin.PostAsJsonAsync("/api/collections", new { name = "christmas FILMS" })).StatusCode);   // same name, any case
+        Assert.Equal(HttpStatusCode.BadRequest, (await admin.PostAsJsonAsync("/api/collections", new { name = "   " })).StatusCode);
+        Assert.Equal(HttpStatusCode.BadRequest, (await admin.PostAsJsonAsync("/api/collections", new { name = new string('x', 61) })).StatusCode);
+
+        Assert.Equal(HttpStatusCode.NoContent, (await admin.PutAsync($"/api/collections/{id}/items/movie/1", null)).StatusCode);
+        Assert.Equal(HttpStatusCode.NoContent, (await admin.PutAsync($"/api/collections/{id}/items/movie/1", null)).StatusCode);   // adding twice is harmless
+        Assert.Equal(HttpStatusCode.BadRequest, (await admin.PutAsync($"/api/collections/{id}/items/album/1", null)).StatusCode);
+        Assert.Equal(HttpStatusCode.BadRequest, (await admin.PutAsync($"/api/collections/{id}/items/movie/999", null)).StatusCode);   // not in the library
+        var one = await admin.GetFromJsonAsync<JsonElement>($"/api/collections/{id}");
+        Assert.Equal("Mine", one.GetProperty("items")[0].GetProperty("title").GetString());
+        Assert.Equal(1, one.GetProperty("items").GetArrayLength());
+        Assert.Equal(1, (await admin.GetFromJsonAsync<JsonElement>("/api/collections")).GetProperty("collections")[0].GetProperty("count").GetInt32());
+        Assert.Equal(id, (await admin.GetFromJsonAsync<JsonElement>("/api/collections/containing/movie/1")).GetProperty("ids")[0].GetInt64());
+
+        // Sam can neither see nor change Admin's collection.
+        Assert.Equal(0, (await sam.GetFromJsonAsync<JsonElement>("/api/collections")).GetProperty("collections").GetArrayLength());
+        Assert.Equal(HttpStatusCode.NotFound, (await sam.GetAsync($"/api/collections/{id}")).StatusCode);
+        Assert.Equal(HttpStatusCode.BadRequest, (await sam.PutAsync($"/api/collections/{id}/items/movie/1", null)).StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, (await sam.DeleteAsync($"/api/collections/{id}")).StatusCode);
+        Assert.Equal(HttpStatusCode.BadRequest, (await sam.PatchAsJsonAsync($"/api/collections/{id}", new { name = "Hijacked" })).StatusCode);
+
+        Assert.Equal(HttpStatusCode.NoContent, (await admin.PatchAsJsonAsync($"/api/collections/{id}", new { name = "Holiday" })).StatusCode);
+        Assert.Equal(HttpStatusCode.NoContent, (await admin.DeleteAsync($"/api/collections/{id}/items/movie/1")).StatusCode);
+        Assert.Equal(0, (await admin.GetFromJsonAsync<JsonElement>($"/api/collections/{id}")).GetProperty("items").GetArrayLength());
+        Assert.Equal(HttpStatusCode.NoContent, (await admin.DeleteAsync($"/api/collections/{id}")).StatusCode);
+        using var c = _f.Db.Open();
+        Assert.Equal(0L, Database.Scalar(c, "SELECT COUNT(*) FROM collection_items"));
+    }
+
+    [Fact] public async Task DeletingSomeone_AlsoRemovesTheirCollections()
+    {
+        var (admin, sam, samId) = await TwoPeople();
+        using (var db = _f.Db.Open()) Database.Execute(db, null, "INSERT INTO media_files(path,size,mtime_ticks,first_seen,last_scanned,parser_version,kind,title) VALUES('m.mp4',1,1,'x','x',1,'Movie','M')");
+        var id = (await (await sam.PostAsJsonAsync("/api/collections", new { name = "Sam's" })).Content.ReadFromJsonAsync<JsonElement>()).GetProperty("id").GetInt64();
+        await sam.PutAsync($"/api/collections/{id}/items/movie/1", null);
+        Assert.Equal(HttpStatusCode.NoContent, (await admin.DeleteAsync($"/api/users/{samId}")).StatusCode);
+        using var c = _f.Db.Open();
+        Assert.Equal(0L, Database.Scalar(c, "SELECT COUNT(*) FROM collections")); Assert.Equal(0L, Database.Scalar(c, "SELECT COUNT(*) FROM collection_items"));
+    }
+
+    [Theory] [InlineData("/api/system/library-health")] [InlineData("/api/system/update")]
+    public async Task ServerReports_AreForAdministratorsOnly(string url)
+    {
+        var (admin, sam, _) = await TwoPeople();
+        Assert.Equal(HttpStatusCode.Forbidden, (await sam.GetAsync(url)).StatusCode);
+        Assert.Equal(HttpStatusCode.Unauthorized, (await _f.Client().GetAsync(url)).StatusCode);
+        Assert.Equal(HttpStatusCode.OK, (await admin.GetAsync(url)).StatusCode);
     }
 
     [Fact] public async Task MarkingASeasonWatched_ThroughTheApi()
