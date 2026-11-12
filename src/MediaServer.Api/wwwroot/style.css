@@ -313,6 +313,7 @@ body.auth-screen { background: radial-gradient(1200px 600px at 20% -10%, color-m
 .logo.big { width: 44px; height: 44px; border-radius: 12px; }
 .auth-card { width: min(420px, 100%); display: flex; flex-direction: column; gap: 14px; padding: 30px 28px; border-radius: 20px; background: color-mix(in srgb, var(--surface) 92%, transparent); border: 1px solid var(--line); box-shadow: 0 24px 70px rgba(0,0,0,.5); animation: fadein .4s ease both; }
 .auth-card h1 { margin: 0; font-size: 1.7rem; letter-spacing: -.01em; }
+.auth-version { margin: 0; color: var(--muted); font-size: .8rem; }
 .auth-sub { margin: -6px 0 6px; color: var(--muted); line-height: 1.45; }
 .auth-input { width: 100%; padding: 14px 18px; border-radius: 12px; border: 1px solid var(--line); background: var(--bg); color: var(--text); font: inherit; font-size: 1rem; }
 .auth-input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 25%, transparent); }

@@ -348,6 +348,14 @@ public sealed class SettingsPagesEndpointTests : IDisposable
         Assert.Equal("Home Cinema", (await c.GetFromJsonAsync<JsonElement>("/api/app")).GetProperty("serverName").GetString());
     }
 
+    [Fact] public async Task AppInfo_ReportsTheVersion_AndItMatchesSystemAbout()
+    {
+        var c = await _f.SignedIn();
+        var version = (await c.GetFromJsonAsync<JsonElement>("/api/app")).GetProperty("version").GetString();
+        Assert.False(string.IsNullOrWhiteSpace(version));
+        Assert.Equal(version, (await c.GetFromJsonAsync<JsonElement>("/api/system/about")).GetProperty("version").GetString());
+    }
+
     [Fact] public async Task AppInfo_ReportsWhetherTranscodingIsAllowed()
     {
         var c = await _f.SignedIn();

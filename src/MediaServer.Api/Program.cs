@@ -104,6 +104,7 @@ app.Use(async (ctx, next) =>
 app.UseMiddleware<MediaServer.Api.Hosting.SecurityHeadersMiddleware>();
 app.Services.GetRequiredService<Database>().Migrate();
 var sealedNow = SecretMigrator.Run(app.Services.GetRequiredService<Database>(), app.Services.GetRequiredService<SecretBox>());   // encrypt anything an older version left readable
+app.Logger.LogInformation("Marquee {Version}", MediaServer.Api.Maintenance.AppVersion.Current);
 if (sealedNow != (0, 0)) app.Logger.LogInformation("Encrypted {Settings} saved settings and {Channels} channel entries that were stored as plain text", sealedNow.Settings, sealedNow.Channels);
 ((IConfigurationBuilder)app.Configuration).Add(app.Services.GetRequiredService<DbSettingsProvider>()); // UI-edited settings override the deployment's
 

@@ -41,10 +41,23 @@ jobs:
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: 10.0.x
+      - name: Work out the version
+        shell: bash
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+          INPUT_LABEL: ${{ inputs.label }}
+        run: |
+          # A tag push (v0.0.3-alpha) uses the tag; a manual run uses the version and label typed in. Neither: keep the csproj default (x.y.z-dev).
+          V=""
+          if [ "$GITHUB_EVENT_NAME" = push ]; then V="${GITHUB_REF_NAME#v}"
+          elif [ -n "$INPUT_VERSION" ]; then V="$INPUT_VERSION"; [ -n "$INPUT_LABEL" ] && V="$V-$(echo "$INPUT_LABEL" | tr 'A-Z ' 'a-z-')"; fi
+          if [ -n "$V" ] && ! [[ "$V" =~ ^[0-9]+(\.[0-9]+){1,3}(-[0-9A-Za-z.-]+)?$ ]]; then echo "Not a usable version: $V"; exit 1; fi
+          echo "APP_VERSION_ARG=${V:+-p:Version=$V}" >> "$GITHUB_ENV"
+          echo "Building version: ${V:-default}"
       - name: Publish (self-contained)
         shell: bash
         run: |
-          dotnet publish src/MediaServer.Api/MediaServer.Api.csproj -c Release -r ${{ matrix.rid }} --self-contained -o out/Marquee -p:DebugType=None -p:DebugSymbols=false
+          dotnet publish src/MediaServer.Api/MediaServer.Api.csproj -c Release -r ${{ matrix.rid }} --self-contained -o out/Marquee -p:DebugType=None -p:DebugSymbols=false $APP_VERSION_ARG
           if [ "$RUNNER_OS" = Windows ]; then cp packaging/windows/* out/Marquee/; else cp packaging/unix/* out/Marquee/; chmod +x out/Marquee/MediaServer.Api out/Marquee/*.sh out/Marquee/*.command; fi
       - name: Bundle ffmpeg (Windows)
         if: runner.os == 'Windows'

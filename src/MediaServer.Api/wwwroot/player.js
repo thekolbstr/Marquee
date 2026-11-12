@@ -257,6 +257,7 @@ class Player {
   // ------------------------------------------------------------------ keyboard
   onKey(e) {
     if (e.target.closest && e.target.closest('input, textarea, select')) return;
+    if (e.ctrlKey || e.metaKey || e.altKey) return;   // browser shortcuts (copy, find, address bar…) are not player keys
     const v = this.video;
     switch (e.key) {
       case ' ': case 'k': e.preventDefault(); this.togglePlay(); break;

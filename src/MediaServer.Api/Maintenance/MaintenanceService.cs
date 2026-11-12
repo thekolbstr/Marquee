@@ -155,9 +155,7 @@ public sealed class MaintenanceService(Database db, IConfiguration config, HlsSe
 
     public async Task<AboutInfo> AboutAsync(CancellationToken ct)
     {
-        var asm = Assembly.GetEntryAssembly();
-        var version = Environment.GetEnvironmentVariable("APP_VERSION") is { Length: > 0 and <= 40 } v ? v
-            : asm?.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion.Split('+')[0] ?? "dev";
+        var version = AppVersion.Current;
         long dbBytes = new[] { DbPath, DbPath + "-wal" }.Where(File.Exists).Sum(p => new FileInfo(p).Length);
         return new AboutInfo(version, RuntimeInformation.FrameworkDescription, RuntimeInformation.OSDescription, Environment.ProcessorCount,
             Environment.WorkingSet, await FfmpegVersionAsync(ct), dbBytes);

@@ -133,6 +133,7 @@ public static class AuthEndpoints
         app.MapGet("/api/app", (AuthService auth, IConfiguration config, MediaServer.Api.Security.HttpsStatus https) => Results.Ok(new
         {
             serverName = auth.ServerName,
+            version = MediaServer.Api.Maintenance.AppVersion.Current,
             httpsPort = https.Enabled ? https.Port : (int?)null,
             castBaseUrl = config["Cast:BaseUrl"] is { Length: > 0 } cb ? cb : null,
             allowTranscoding = MediaServer.Api.Hls.HlsOptions.From(config).AllowTranscoding,

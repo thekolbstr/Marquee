@@ -52,7 +52,11 @@ function watchedMenu(seriesKey, getSeason, onDone) {
       .map(([t, sn, w]) => h('button', { type: 'button', role: 'menuitem', onclick: () => { menu.classList.add('hidden'); run(sn, w); } }, h('span', {}, t))));
     menu.classList.toggle('hidden');
   } }, icon('check'), 'Watched…');
-  document.addEventListener('click', (e) => { if (!menu.contains(e.target) && !btn.contains(e.target)) menu.classList.add('hidden'); });
+  const away = (e) => {
+    if (!btn.isConnected) { document.removeEventListener('click', away); return; }   // the page was left: drop this listener
+    if (!e.composedPath().includes(menu) && !e.composedPath().includes(btn)) menu.classList.add('hidden');
+  };
+  document.addEventListener('click', away);
   return h('div', { class: 'watchedmenu' }, btn, menu);
 }
 

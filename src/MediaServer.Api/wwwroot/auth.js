@@ -15,9 +15,17 @@ function paintUserChip() {
   if (gear) gear.after(chip);
 }
 // What the server says about itself (name, whether transcoding is on). Filled in at start-up.
-const APP = { name: 'MediaServer', allowTranscoding: true, httpsPort: null };
+const APP = { name: 'MediaServer', version: '', allowTranscoding: true, httpsPort: null };
+// A full git hash (Docker builds) is shortened to 7 characters.
+const shortVersion = (v) => (/^[0-9a-f]{40}$/.test(v) ? v.slice(0, 7) : v || '');
 async function refreshApp() {
-  try { const a = await (await fetch('/api/app')).json(); applyServerName(a.serverName); APP.allowTranscoding = a.allowTranscoding; APP.httpsPort = a.httpsPort; } catch { /* keep what we had */ }
+  try { const a = await (await fetch('/api/app')).json(); applyServerName(a.serverName); APP.version = shortVersion(a.version); applyVersion(); APP.allowTranscoding = a.allowTranscoding; APP.httpsPort = a.httpsPort; } catch { /* keep what we had */ }
+}
+// The version shows as a tooltip on the logo in the top bar and as a line under the sign-in forms.
+function applyVersion() {
+  const brand = document.querySelector('#top .brand');
+  if (brand && APP.version) brand.title = `${APP.name} ${APP.version}`;
+  document.querySelectorAll('.auth-version').forEach((e) => { e.textContent = APP.version ? `Version ${APP.version}` : ''; });
 }
 function applyServerName(name) {
   APP.name = name || 'MediaServer';
@@ -30,7 +38,8 @@ function authShell(...kids) {
   document.body.classList.add('auth-screen', 'auth-on');
   document.title = APP.name;
   view.replaceChildren(h('div', { class: 'auth-wrap' },
-    h('div', { class: 'auth-brand' }, h('span', { class: 'logo big', 'aria-hidden': 'true' }), h('span', {}, APP.name)), ...kids));
+    h('div', { class: 'auth-brand' }, h('span', { class: 'logo big', 'aria-hidden': 'true' }), h('span', {}, APP.name)), ...kids,
+    h('p', { class: 'auth-version' }, APP.version ? `Version ${APP.version}` : '')));
   window.scrollTo(0, 0);
 }
 
