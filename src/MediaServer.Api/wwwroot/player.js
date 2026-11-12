@@ -165,7 +165,8 @@ class Player {
     on(v, 'ended', () => this.onEnded());
     on(v, 'click', () => { if (matchMedia('(hover: hover)').matches) this.togglePlay(); });   // a tap on a touch screen only reveals the controls
     on(v, 'dblclick', () => this.toggleFullscreen());
-    on(stage, 'click', (e) => { if (this.menuPage && !this.menu.contains(e.target) && !this.gearBtn.contains(e.target)) this.closeMenu(); });
+    // composedPath() is captured at dispatch time, so it still includes the menu after a row's click handler has re-rendered it (which detaches the clicked button).
+    on(stage, 'click', (e) => { const path = e.composedPath(); if (this.menuPage && !path.includes(this.menu) && !path.includes(this.gearBtn)) this.closeMenu(); });
     on(document, 'keydown', (e) => this.onKey(e));
     on(window, 'pagehide', () => this.saveBeacon());
     this.skipBtn.addEventListener('click', () => this.doSkip());
